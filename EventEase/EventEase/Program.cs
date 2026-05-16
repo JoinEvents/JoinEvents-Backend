@@ -122,6 +122,33 @@ if (!app.Environment.IsProduction())
 }
 app.UseAuthentication();
 app.UseAuthorization();
+// Health Check
+app.MapGet("/health", async (EventEaseDbContext db) => {
+    try {
+        await db.Database.CanConnectAsync();
+        return Results.Ok(new { status = "Healthy", database = "Connected" });
+    } catch (Exception ex) {
+        return Results.Problem($"Database Unreachable: {ex.Message}");
+    }
+});
+
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        context.Response.StatusCode = 500;
+        context.Response.ContentType = "application/json";
+        // Ensure CORS is present even on errors
+        context.Response.Headers.Add("Access-Control-Allow-Origin", "*");
+        
+        var exceptionHandlerPathFeature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
+        await context.Response.WriteAsJsonAsync(new { 
+            error = "Internal Server Error", 
+            details = exceptionHandlerPathFeature?.Error.Message 
+        });
+    });
+});
+
 app.MapControllers();
 
 app.Run();
