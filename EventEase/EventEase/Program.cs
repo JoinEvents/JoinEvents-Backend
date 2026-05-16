@@ -72,41 +72,29 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
+
+// --- SEAMLESS CONNECTIVITY LOGIC ---
+// 1. Try standard .NET Environment Variable: ConnectionStrings__DefaultConnection
+// 2. Try your specific Secret variable: EVENT_EASE_DB_CONNECTION
+// 3. Fallback to appsettings.json
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 
-// Hardcoded Fallback for Cloud Run Secrets
 if (string.IsNullOrEmpty(connectionString) || connectionString.Contains("$"))
 {
-    var envValue = Environment.GetEnvironmentVariable("EVENT_EASE_DB_CONNECTION");
-    if (!string.IsNullOrEmpty(envValue))
-    {
-        connectionString = envValue;
-        Console.WriteLine("[Startup] Connection string retrieved directly from EVENT_EASE_DB_CONNECTION env var.");
-    }
+    connectionString = Environment.GetEnvironmentVariable("EVENT_EASE_DB_CONNECTION");
 }
 
-if (!string.IsNullOrEmpty(connectionString) && connectionString.Contains("${"))
+if (string.IsNullOrEmpty(connectionString))
 {
-    foreach (System.Collections.DictionaryEntry ev in Environment.GetEnvironmentVariables())
-    {
-        var key = ev.Key.ToString();
-        var value = ev.Value?.ToString();
-        if (!string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(value))
-        {
-            connectionString = connectionString.Replace($"${{{key}}}", value);
-            connectionString = connectionString.Replace($"${key}", value);
-        }
-    }
-}
-
-if (string.IsNullOrEmpty(connectionString) || connectionString.Contains("$"))
-{
-    Console.WriteLine("[Startup] ERROR: Connection string is MISSING or still has placeholders!");
-    Console.WriteLine("[Startup] Available Env Vars: " + string.Join(", ", Environment.GetEnvironmentVariables().Keys.Cast<object>().Select(k => k.ToString())));
+    Console.WriteLine("[Critical] Database connection string is missing!");
 }
 
 builder.Services.AddDbContext<EventEaseDbContext>(o =>
-  o.UseSqlServer(connectionString, sql => sql.UseCompatibilityLevel(120)));
+  o.UseSqlServer(connectionString, sql => {
+      sql.UseCompatibilityLevel(120);
+      sql.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(30), errorNumbersToAdd: null);
+  }));
+// -----------------------------------
 //builder.Services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(builder.Configuration["Redis:Connection"]));
 //builder.Services.AddScoped<IOtpService, RedisOtpService>();
 builder.Services.AddScoped<ITokenService, TokenService>();
