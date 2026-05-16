@@ -55,10 +55,12 @@ namespace EventEase.Api.Controllers
             }
             catch (InvalidOperationException ex)
             {
+                Serilog.Log.Warning("Registration attempt failed (User exists): {Email}", dto?.email);
                 return BadRequest(new { error = ex.Message });
             }
             catch (ArgumentException ex)
             {
+                Serilog.Log.Warning("Registration attempt failed (Invalid data): {Message}", ex.Message);
                 return BadRequest(new { error = ex.Message });
             }
             catch (Exception ex)

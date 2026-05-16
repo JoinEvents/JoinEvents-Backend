@@ -58,8 +58,23 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+if (connectionString != null && connectionString.Contains("${"))
+{
+    // Manually expand ${VAR} placeholders if they weren't replaced by the environment provider
+    foreach (System.Collections.DictionaryEntry ev in Environment.GetEnvironmentVariables())
+    {
+        var key = ev.Key.ToString();
+        var value = ev.Value?.ToString();
+        if (key != null && value != null)
+        {
+            connectionString = connectionString.Replace($"${{{key}}}", value);
+        }
+    }
+}
+
 builder.Services.AddDbContext<EventEaseDbContext>(o =>
-  o.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"), sql => sql.UseCompatibilityLevel(120)));
+  o.UseSqlServer(connectionString, sql => sql.UseCompatibilityLevel(120)));
 //builder.Services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(builder.Configuration["Redis:Connection"]));
 //builder.Services.AddScoped<IOtpService, RedisOtpService>();
 builder.Services.AddScoped<ITokenService, TokenService>();
