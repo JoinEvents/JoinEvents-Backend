@@ -30,21 +30,35 @@ builder.Host.UseSerilog();
 
 // Add services to the container.
 builder.Services.AddAuthentication("Bearer")
-  .AddJwtBearer(options =>
-  {
-      options.TokenValidationParameters = new TokenValidationParameters
-      {
-          ValidateIssuer = true,
-          ValidateAudience = true,
-          ValidateLifetime = true,
-          ValidateIssuerSigningKey = true,
-          ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "EventEase",
-          ValidAudience = builder.Configuration["Jwt:Audience"] ?? "EventEase",
-          IssuerSigningKey = new SymmetricSecurityKey(
-              Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"] ?? "a_very_long_dummy_key_for_startup_purposes_only_12345")),
-          RoleClaimType = System.Security.Claims.ClaimTypes.Role
-      };
-  });
+    .AddJwtBearer(options =>
+    {
+        var jwtKey = builder.Configuration["Jwt:Key"] ?? "a_very_long_dummy_key_for_startup_purposes_only_12345";
+        if (jwtKey.Contains("${"))
+        {
+            foreach (System.Collections.DictionaryEntry ev in Environment.GetEnvironmentVariables())
+            {
+                var key = ev.Key.ToString();
+                var value = ev.Value?.ToString();
+                if (!string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(value))
+                {
+                    jwtKey = jwtKey.Replace($"${{{key}}}", value);
+                    jwtKey = jwtKey.Replace($"${key}", value);
+                }
+            }
+        }
+
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "EventEase",
+            ValidAudience = builder.Configuration["Jwt:Audience"] ?? "EventEase",
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+            RoleClaimType = System.Security.Claims.ClaimTypes.Role
+        };
+    });
 
 builder.Services.AddAuthorization(options =>
 {
@@ -59,18 +73,33 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-if (connectionString != null && connectionString.Contains("${"))
+Console.WriteLine($"[Startup] Initial Connection String from Config: {connectionString ?? "NULL"}");
+
+if (!string.IsNullOrEmpty(connectionString) && (connectionString.Contains("${") || connectionString.Contains("$")))
 {
-    // Manually expand ${VAR} placeholders if they weren't replaced by the environment provider
+    // Try expanding using standard Environment.ExpandEnvironmentVariables first
+    // Note: This expects %VAR% on Windows but we are likely on Linux in Cloud Run
+    
     foreach (System.Collections.DictionaryEntry ev in Environment.GetEnvironmentVariables())
     {
         var key = ev.Key.ToString();
         var value = ev.Value?.ToString();
-        if (key != null && value != null)
+        if (!string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(value))
         {
+            // Handle both ${VAR} and $VAR formats
             connectionString = connectionString.Replace($"${{{key}}}", value);
+            connectionString = connectionString.Replace($"${key}", value);
         }
     }
+}
+
+if (string.IsNullOrEmpty(connectionString) || connectionString.Contains("$"))
+{
+    Console.WriteLine("[Startup] WARNING: Connection string still contains placeholders or is empty!");
+}
+else
+{
+    Console.WriteLine("[Startup] Connection string expanded successfully (length: " + connectionString.Length + ")");
 }
 
 builder.Services.AddDbContext<EventEaseDbContext>(o =>
