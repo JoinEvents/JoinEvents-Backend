@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration;
 using StackExchange.Redis;
 using System;
 using System.Collections.Generic;
@@ -49,6 +49,7 @@ namespace EventEase.Infrastructure.Otp
 
             //if (val.IsNullOrEmpty || val != otp) return false;
             //await _db.KeyDeleteAsync($"otp:{phone}");
+            await Task.CompletedTask;
             return true;
         }
 

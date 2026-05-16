@@ -2,16 +2,14 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
-# Copy solution and project files
-COPY ["EventEase/EventEase.sln", "."]
-COPY ["EventEase/EventEase/EventEase.Api.csproj", "EventEase/"]
-COPY ["EventEase/EventEase.Application/EventEase.Application.csproj", "EventEase.Application/"]
-COPY ["EventEase/EventEase.Core/EventEase.Core.csproj", "EventEase.Core/"]
-COPY ["EventEase/EventEase.Infrastructure/EventEase.Infrastructure.csproj", "EventEase.Infrastructure/"]
-COPY ["EventEase/EventEase.Tests/EventEase.Tests.csproj", "EventEase.Tests/"]
+# Copy everything first to preserve directory structure for restore
+COPY ["EventEase/", "EventEase/"]
 
 # Restore dependencies
-RUN dotnet restore "EventEase.sln"
+RUN dotnet restore "EventEase/EventEase.sln"
+
+# The rest of the source is already there, but we can copy again if needed
+# though COPY ["EventEase/", "EventEase/"] already covered it.
 
 # Copy source code
 COPY ["EventEase/", "."]

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -10,9 +10,9 @@ namespace EventEase.Core.Entities
     {
         public Guid Id { get; set; }
         public Guid VendorId { get; set; }
-        public string Name { get; set; }
+        public string Name { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
-        public string Category { get; set; } // e.g., Catering, Decor
+        public string Category { get; set; } = string.Empty; // e.g., Catering, Decor
         public string SubCategory { get; set; } = string.Empty;
         public decimal Price { get; set; } = 0;
         public string Availability { get; set; } = string.Empty;
@@ -21,6 +21,6 @@ namespace EventEase.Core.Entities
         public double Rating { get; set; } = 0.0;
         public int  Status { get; set; }  // Active, Inactive
 
-        public Vendor vendors { get; set; }
+        public Vendor vendors { get; set; } = null!;
     }
 }

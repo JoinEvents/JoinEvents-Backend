@@ -9,6 +9,6 @@ namespace EventEase.Core.Entities
         public string Url { get; set; } = string.Empty;
         public bool IsMain { get; set; }
         
-        public Package Package { get; set; }
+        public Package Package { get; set; } = null!;
     }
 }

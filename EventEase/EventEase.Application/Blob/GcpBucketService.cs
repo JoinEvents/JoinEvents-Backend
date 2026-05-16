@@ -15,8 +15,8 @@ namespace EventEase.Application.Blob
 
         public GcpBucketService(IConfiguration config)
         {
-            _projectId = config["Gcp:ProjectId"];
-            _bucketName = config["Gcp:BucketName"];
+            _projectId = config["Gcp:ProjectId"] ?? string.Empty;
+            _bucketName = config["Gcp:BucketName"] ?? string.Empty;
             var credentialsPath = config["Gcp:CredentialsPath"];
 
             if (string.IsNullOrEmpty(_projectId))
