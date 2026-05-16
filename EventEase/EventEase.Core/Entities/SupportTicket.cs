@@ -1,0 +1,19 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace EventEase.Core.Entities
+{
+    public class SupportTicket
+    {
+        public Guid Id { get; set; }
+        public Guid UserId { get; set; }
+        public string Subject { get; set; }
+        public string Description { get; set; }
+        public string Status { get; set; } = "Open"; // Open, InProgress, Resolved, Closed
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime? UpdatedAt { get; set; }
+    }
+}
