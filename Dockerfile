@@ -2,17 +2,11 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
-# Copy everything first to preserve directory structure for restore
-COPY ["EventEase/", "EventEase/"]
-
-# Restore dependencies
-RUN dotnet restore "EventEase/EventEase.sln"
-
-# The rest of the source is already there, but we can copy again if needed
-# though COPY ["EventEase/", "EventEase/"] already covered it.
-
-# Copy source code
+# Copy everything from the EventEase subdirectory into /src
 COPY ["EventEase/", "."]
+
+# Restore dependencies using the solution file
+RUN dotnet restore "EventEase.sln"
 
 # Build the application
 RUN dotnet build "EventEase/EventEase.Api.csproj" -c Release -o /app/build
