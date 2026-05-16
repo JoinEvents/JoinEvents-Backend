@@ -1,5 +1,5 @@
 using EventEase.Application.Blob;
-using EventEase.Application.Packages;
+using EventEase.Application.PackageManagement;
 using EventEase.Core.Entities;
 using EventEase.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;

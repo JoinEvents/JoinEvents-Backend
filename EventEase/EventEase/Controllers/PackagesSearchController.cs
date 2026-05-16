@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using EventEase.Application.Packages;
+using EventEase.Application.PackageManagement;
 using EventEase.Infrastructure.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
