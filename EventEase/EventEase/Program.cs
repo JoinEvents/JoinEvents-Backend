@@ -73,20 +73,26 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-Console.WriteLine($"[Startup] Initial Connection String from Config: {connectionString ?? "NULL"}");
 
-if (!string.IsNullOrEmpty(connectionString) && (connectionString.Contains("${") || connectionString.Contains("$")))
+// Hardcoded Fallback for Cloud Run Secrets
+if (string.IsNullOrEmpty(connectionString) || connectionString.Contains("$"))
 {
-    // Try expanding using standard Environment.ExpandEnvironmentVariables first
-    // Note: This expects %VAR% on Windows but we are likely on Linux in Cloud Run
-    
+    var envValue = Environment.GetEnvironmentVariable("EVENT_EASE_DB_CONNECTION");
+    if (!string.IsNullOrEmpty(envValue))
+    {
+        connectionString = envValue;
+        Console.WriteLine("[Startup] Connection string retrieved directly from EVENT_EASE_DB_CONNECTION env var.");
+    }
+}
+
+if (!string.IsNullOrEmpty(connectionString) && connectionString.Contains("${"))
+{
     foreach (System.Collections.DictionaryEntry ev in Environment.GetEnvironmentVariables())
     {
         var key = ev.Key.ToString();
         var value = ev.Value?.ToString();
         if (!string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(value))
         {
-            // Handle both ${VAR} and $VAR formats
             connectionString = connectionString.Replace($"${{{key}}}", value);
             connectionString = connectionString.Replace($"${key}", value);
         }
@@ -95,11 +101,8 @@ if (!string.IsNullOrEmpty(connectionString) && (connectionString.Contains("${") 
 
 if (string.IsNullOrEmpty(connectionString) || connectionString.Contains("$"))
 {
-    Console.WriteLine("[Startup] WARNING: Connection string still contains placeholders or is empty!");
-}
-else
-{
-    Console.WriteLine("[Startup] Connection string expanded successfully (length: " + connectionString.Length + ")");
+    Console.WriteLine("[Startup] ERROR: Connection string is MISSING or still has placeholders!");
+    Console.WriteLine("[Startup] Available Env Vars: " + string.Join(", ", Environment.GetEnvironmentVariables().Keys.Cast<object>().Select(k => k.ToString())));
 }
 
 builder.Services.AddDbContext<EventEaseDbContext>(o =>
