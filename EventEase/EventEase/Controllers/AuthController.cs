@@ -35,8 +35,37 @@ namespace EventEase.Api.Controllers
         [HttpPost("/api/v1/auth/register")]
         public async Task<IActionResult> RegisterWithPassword([FromBody] RegisterWithPasswordDto dto)
         {
-            var tokens = await _auth.RegisterWithPasswordAsync(dto);
-            return Ok(new { token = tokens.AccessToken, user = new { id = tokens.User.Id.ToString(), name = tokens.User.Name, email = tokens.User.Email, role = tokens.User.Role.ToLower() } });
+            try
+            {
+                if (dto == null || string.IsNullOrEmpty(dto.email) || string.IsNullOrEmpty(dto.password))
+                {
+                    return BadRequest(new { error = "Email and Password are required." });
+                }
+
+                var tokens = await _auth.RegisterWithPasswordAsync(dto);
+                return Ok(new { 
+                    token = tokens.AccessToken, 
+                    user = new { 
+                        id = tokens.User.Id.ToString(), 
+                        name = tokens.User.Name, 
+                        email = tokens.User.Email, 
+                        role = (tokens.User.Role ?? "Customer").ToLower() 
+                    } 
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                Serilog.Log.Error(ex, "Registration failed for email: {Email}", dto?.email);
+                return StatusCode(500, new { error = "Registration failed", details = ex.Message });
+            }
         }
 
         [HttpPost("/api/v1/auth/login")]

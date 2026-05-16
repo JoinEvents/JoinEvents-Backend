@@ -48,21 +48,28 @@ namespace EventEase.Application.Auth
 
         public async Task<AuthTokens> RegisterWithPasswordAsync(RegisterWithPasswordDto dto)
         {
+            if (string.IsNullOrEmpty(dto.email)) throw new ArgumentException("Email is required");
+            if (string.IsNullOrEmpty(dto.password)) throw new ArgumentException("Password is required");
+
             var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == dto.email);
-            if (user is null)
+            if (user != null)
             {
-                user = new User
-                {
-                    Id = Guid.NewGuid(),
-                    Name = dto.name,
-                    Email = dto.email,
-                    Phone = dto.phone,
-                    Role = dto.role ?? "Customer",
-                    PasswordHash = HashPassword(dto.password)
-                };
-                _db.Users.Add(user);
-                await _db.SaveChangesAsync();
+                throw new InvalidOperationException("User with this email already exists");
             }
+
+            user = new User
+            {
+                Id = Guid.NewGuid(),
+                Name = dto.name,
+                Email = dto.email,
+                Phone = dto.phone,
+                Role = dto.role ?? "Customer",
+                PasswordHash = HashPassword(dto.password),
+                CreatedAt = DateTime.UtcNow
+            };
+            
+            _db.Users.Add(user);
+            await _db.SaveChangesAsync();
 
             var access = _tokens.CreateAccessToken(user.Id, user.Role);
             var (refresh, exp) = _tokens.CreateRefreshToken();
