@@ -15,8 +15,18 @@ using Microsoft.Extensions.Caching.StackExchangeRedis;
 using Microsoft.IdentityModel.Tokens;
 using StackExchange.Redis;
 using System.Text;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Configure Serilog
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .Enrich.FromLogContext()
+    .CreateLogger();
+
+builder.Host.UseSerilog();
+
 
 // Add services to the container.
 builder.Services.AddAuthentication("Bearer")
@@ -94,6 +104,8 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 
 app.UseCors("AllowAll");
+app.UseSerilogRequestLogging();
+
 try
 {
     using (var scope = app.Services.CreateScope())
@@ -106,7 +118,7 @@ try
 catch (Exception ex)
 {
     // Log the error but allow the app to start so Cloud Run doesn't kill the container
-    Console.WriteLine($"Database Migration Failed: {ex.Message}");
+    Log.Error(ex, "Database Migration Failed");
 }
 app.MapHub<ChatHub>("/hubs/chat");
 // Configure the HTTP request pipeline.
@@ -136,19 +148,35 @@ app.UseExceptionHandler(errorApp =>
 {
     errorApp.Run(async context =>
     {
+        var exceptionHandlerPathFeature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
+        var exception = exceptionHandlerPathFeature?.Error;
+
+        Log.Error(exception, "Unhandled exception occurred while processing the request");
+
         context.Response.StatusCode = 500;
         context.Response.ContentType = "application/json";
         // Ensure CORS is present even on errors
         context.Response.Headers.Add("Access-Control-Allow-Origin", "*");
         
-        var exceptionHandlerPathFeature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
         await context.Response.WriteAsJsonAsync(new { 
             error = "Internal Server Error", 
-            details = exceptionHandlerPathFeature?.Error.Message 
+            details = exception?.Message 
         });
     });
 });
 
 app.MapControllers();
 
-app.Run();
+try
+{
+    Log.Information("Starting web host");
+    app.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Host terminated unexpectedly");
+}
+finally
+{
+    Log.CloseAndFlush();
+}
