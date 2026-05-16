@@ -8,6 +8,7 @@ COPY ["EventEase/EventEase/EventEase.Api.csproj", "EventEase/"]
 COPY ["EventEase/EventEase.Application/EventEase.Application.csproj", "EventEase.Application/"]
 COPY ["EventEase/EventEase.Core/EventEase.Core.csproj", "EventEase.Core/"]
 COPY ["EventEase/EventEase.Infrastructure/EventEase.Infrastructure.csproj", "EventEase.Infrastructure/"]
+COPY ["EventEase/EventEase.Tests/EventEase.Tests.csproj", "EventEase.Tests/"]
 
 # Restore dependencies
 RUN dotnet restore "EventEase.sln"
