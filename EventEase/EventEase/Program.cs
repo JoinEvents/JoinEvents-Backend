@@ -82,19 +82,18 @@ builder.Services.AddControllers()
 
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowDevEventPlanner",
+    options.AddPolicy("AllowAll",
         policy =>
         {
-            policy.WithOrigins("http://localhost:4200", "http://localhost:8200/")  // Angular dev server URL
+            policy.AllowAnyOrigin()
                   .AllowAnyHeader()
-                  .AllowAnyMethod()
-                  .AllowCredentials(); // optional if using cookies/auth
+                  .AllowAnyMethod();
         });
 });
 
 var app = builder.Build();
 
-app.UseCors("AllowDevEventPlanner");
+app.UseCors("AllowAll");
 try
 {
     using (var scope = app.Services.CreateScope())
