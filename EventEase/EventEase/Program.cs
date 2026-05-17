@@ -153,7 +153,6 @@ var app = builder.Build();
 app.UseCors("AllowAll");
 app.UseSerilogRequestLogging();
 
-// ✅ FIXED: throw added so migration errors are visible in Cloud Run logs
 try
 {
     using (var scope = app.Services.CreateScope())
@@ -191,7 +190,7 @@ catch (Exception ex)
 }
 
 app.MapHub<ChatHub>("/hubs/chat");
-// Configure the HTTP request pipeline.
+// Configure the HTTP request pipeline.  
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
