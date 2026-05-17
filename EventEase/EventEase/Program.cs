@@ -71,6 +71,11 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+var envJwtKey = Environment.GetEnvironmentVariable("EVENT_EASE_JWT_KEY");
+if (!string.IsNullOrEmpty(envJwtKey))
+{
+    builder.Configuration["Jwt:Key"] = envJwtKey;
+}
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
 
 // --- SEAMLESS CONNECTIVITY LOGIC ---
@@ -186,7 +191,7 @@ try
 catch (Exception ex)
 {
     Log.Fatal(ex, "[Migration] Database Migration Failed — {Message}", ex.Message);
-    // ← temporarily commented out so Cloud Run completes deployment
+    throw; // ← crash visibly so Cloud Run logs show the real error
 }
 
 app.MapHub<ChatHub>("/hubs/chat");
