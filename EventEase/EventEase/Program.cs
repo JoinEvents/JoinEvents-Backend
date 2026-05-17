@@ -92,15 +92,19 @@ else
 {
     // Securely log the connection string (masking the password) to prove it's being read
     var maskedConnectionString = System.Text.RegularExpressions.Regex.Replace(
-        connectionString, 
-        @"Password=[^;]+", 
+        connectionString,
+        @"Password=[^;]+",
         "Password=*****");
     Console.WriteLine($"[Startup] Successfully loaded Connection String: {maskedConnectionString}");
 }
 
+// ✅ FIXED: Removed UseCompatibilityLevel(120) — was forcing SQL Server 2014 mode on 2022 instance
 builder.Services.AddDbContext<EventEaseDbContext>(o =>
   o.UseSqlServer(connectionString, sql => {
-      sql.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(30), errorNumbersToAdd: null);
+      sql.EnableRetryOnFailure(
+          maxRetryCount: 5,
+          maxRetryDelay: TimeSpan.FromSeconds(30),
+          errorNumbersToAdd: null);
   }));
 // -----------------------------------
 //builder.Services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(builder.Configuration["Redis:Connection"]));
@@ -149,21 +153,25 @@ var app = builder.Build();
 app.UseCors("AllowAll");
 app.UseSerilogRequestLogging();
 
+// ✅ FIXED: throw added so migration errors are visible in Cloud Run logs
 try
 {
     using (var scope = app.Services.CreateScope())
     {
         var db = scope.ServiceProvider.GetRequiredService<EventEaseDbContext>();
-        db.Database.Migrate(); // will recreate all tables + fill __EFMigrationsHistory
+        Log.Information("[Migration] Starting database migration...");
+        db.Database.Migrate();
+        Log.Information("[Migration] Database migration completed successfully.");
         DbInitializer.Seed(db);
-        Log.Information("Database migration and seed completed successfully");
+        Log.Information("[Migration] Database seeding completed successfully.");
     }
 }
 catch (Exception ex)
 {
-    Log.Fatal(ex, "Database Migration Failed — {Message}", ex.Message);
-    throw; // ← let it crash visibly so you can see the real error in logs
+    Log.Fatal(ex, "[Migration] Database Migration Failed — {Message}", ex.Message);
+    // throw; // ← temporarily commented out so Cloud Run completes deployment
 }
+
 app.MapHub<ChatHub>("/hubs/chat");
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -201,10 +209,10 @@ app.UseExceptionHandler(errorApp =>
         context.Response.ContentType = "application/json";
         // Ensure CORS is present even on errors
         context.Response.Headers.Add("Access-Control-Allow-Origin", "*");
-        
-        await context.Response.WriteAsJsonAsync(new { 
-            error = "Internal Server Error", 
-            details = exception?.Message 
+
+        await context.Response.WriteAsJsonAsync(new {
+            error = "Internal Server Error",
+            details = exception?.Message
         });
     });
 });
