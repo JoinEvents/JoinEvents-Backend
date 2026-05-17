@@ -100,7 +100,6 @@ else
 
 builder.Services.AddDbContext<EventEaseDbContext>(o =>
   o.UseSqlServer(connectionString, sql => {
-      sql.UseCompatibilityLevel(120);
       sql.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(30), errorNumbersToAdd: null);
   }));
 // -----------------------------------
@@ -155,14 +154,15 @@ try
     using (var scope = app.Services.CreateScope())
     {
         var db = scope.ServiceProvider.GetRequiredService<EventEaseDbContext>();
-        db.Database.Migrate();
+        db.Database.Migrate(); // will recreate all tables + fill __EFMigrationsHistory
         DbInitializer.Seed(db);
+        Log.Information("Database migration and seed completed successfully");
     }
 }
 catch (Exception ex)
 {
-    // Log the error but allow the app to start so Cloud Run doesn't kill the container
-    Log.Error(ex, "Database Migration Failed");
+    Log.Fatal(ex, "Database Migration Failed — {Message}", ex.Message);
+    throw; // ← let it crash visibly so you can see the real error in logs
 }
 app.MapHub<ChatHub>("/hubs/chat");
 // Configure the HTTP request pipeline.
