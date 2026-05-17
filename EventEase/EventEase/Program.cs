@@ -88,6 +88,15 @@ if (string.IsNullOrEmpty(connectionString))
 {
     Console.WriteLine("[Critical] Database connection string is missing!");
 }
+else
+{
+    // Securely log the connection string (masking the password) to prove it's being read
+    var maskedConnectionString = System.Text.RegularExpressions.Regex.Replace(
+        connectionString, 
+        @"Password=[^;]+", 
+        "Password=*****");
+    Console.WriteLine($"[Startup] Successfully loaded Connection String: {maskedConnectionString}");
+}
 
 builder.Services.AddDbContext<EventEaseDbContext>(o =>
   o.UseSqlServer(connectionString, sql => {
