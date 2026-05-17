@@ -159,6 +159,24 @@ try
     using (var scope = app.Services.CreateScope())
     {
         var db = scope.ServiceProvider.GetRequiredService<EventEaseDbContext>();
+        
+        // --- DIAGNOSTICS FOR MIGRATION ---
+        var pendingMigrations = db.Database.GetPendingMigrations().ToList();
+        var appliedMigrations = db.Database.GetAppliedMigrations().ToList();
+        
+        Log.Information($"[Migration Diagnostics] Found {appliedMigrations.Count} applied migrations.");
+        Log.Information($"[Migration Diagnostics] Found {pendingMigrations.Count} pending migrations.");
+        
+        if (pendingMigrations.Any())
+        {
+            Log.Information($"[Migration] First pending migration is: {pendingMigrations.First()}");
+        }
+        else
+        {
+            Log.Warning("[Migration] No pending migrations found! EF Core thinks the database is fully up to date.");
+        }
+        // ---------------------------------
+
         Log.Information("[Migration] Starting database migration...");
         db.Database.Migrate();
         Log.Information("[Migration] Database migration completed successfully.");
