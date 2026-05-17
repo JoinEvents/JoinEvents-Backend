@@ -186,7 +186,7 @@ try
 catch (Exception ex)
 {
     Log.Fatal(ex, "[Migration] Database Migration Failed — {Message}", ex.Message);
-    // throw; // ← temporarily commented out so Cloud Run completes deployment
+    // ← temporarily commented out so Cloud Run completes deployment
 }
 
 app.MapHub<ChatHub>("/hubs/chat");
