@@ -94,7 +94,6 @@ namespace EventEase.Api.Controllers
                     SeatingCapacity = s.SeatingCapacity,
                     FloatingCapacity = s.FloatingCapacity
                 }).ToList(),
-                Status = PackageStatus.PendingReview,
                 IsVerified = false,
                 IsActive = true,
                 CreatedAt = DateTime.UtcNow,
@@ -115,7 +114,7 @@ namespace EventEase.Api.Controllers
                 vendorId = $"usr_{vendorId:N}",
                 name = package.Name,
                 category = package.Category,
-                status = package.Status,
+                status = package.IsVerified ? "Active" : "PendingReview",
                 isVerified = package.IsVerified,
                 isActive = package.IsActive,
                 createdAt = package.CreatedAt
@@ -207,18 +206,15 @@ namespace EventEase.Api.Controllers
                 var spacesByPackageId = new Dictionary<Guid, List<PackageSpace>>();
                 if (packageIds.Any())
                 {
-                    foreach (var id in packageIds)
-                    {
-                        var pkg = await _db.Packages
-                            .AsNoTracking()
-                            .Where(p => p.Id == id)
-                            .Select(p => new { p.Id, p.Spaces })
-                            .FirstOrDefaultAsync();
-                        if (pkg != null)
-                        {
-                            spacesByPackageId[pkg.Id] = pkg.Spaces.ToList();
-                        }
-                    }
+                    var spacesDataRaw = await _db.Packages
+                        .AsNoTracking()
+                        .Where(p => packageIds.Contains(p.Id))
+                        .SelectMany(p => p.Spaces, (p, s) => new { PackageId = p.Id, Space = s })
+                        .ToListAsync();
+
+                    spacesByPackageId = spacesDataRaw
+                        .GroupBy(s => s.PackageId)
+                        .ToDictionary(g => g.Key, g => g.Select(x => x.Space).ToList());
                 }
 
                 // Manually link data back to packages in memory
@@ -379,7 +375,6 @@ namespace EventEase.Api.Controllers
                 }
             }
 
-            package.Status = PackageStatus.PendingReview;
             package.IsVerified = false;
             package.UpdatedAt = DateTime.UtcNow;
 
@@ -389,7 +384,7 @@ namespace EventEase.Api.Controllers
             {
                 id = $"pkg_{package.Id:N}",
                 name = package.Name,
-                status = package.Status,
+                status = package.IsVerified ? "Active" : "PendingReview",
                 isVerified = package.IsVerified,
                 updatedAt = package.UpdatedAt
             });
@@ -581,7 +576,7 @@ namespace EventEase.Api.Controllers
                 Images = p.Images?.Select(i => i.Url).ToList() ?? new System.Collections.Generic.List<string>(),
                 Rating = p.Rating,
                 TotalReviews = p.TotalReviews,
-                Status = p.Status.ToString(),
+                Status = p.IsVerified ? "Active" : "PendingReview",
                 IsVerified = p.IsVerified,
                 IsActive = p.IsActive,
                 CreatedAt = p.CreatedAt,

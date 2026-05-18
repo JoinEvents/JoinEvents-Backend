@@ -18,9 +18,11 @@ namespace EventEase.Infrastructure.Data
             // ── Full seed only on empty DB ────────────────────────────────────
             if (db.Users.Count() > 2) return; // vendor + customer already seeded
 
-            var user       = new User { Id = Guid.NewGuid(), Name = "Test User",    Phone = "9999999999", Email = "user@test.com",   Role = "User",   PasswordHash = Hash("JoinEvents@2025") };
-            var vendorUser = new User { Id = Guid.NewGuid(), Name = "Vendor Owner", Phone = "8888888888", Email = "vendor@test.com", Role = "Vendor", PasswordHash = Hash("JoinEvents@2025") };
-            db.Users.AddRange(user, vendorUser);
+            var user = new User { Id = Guid.NewGuid(), Name = "Test User", Phone = "9999999999", Email = "user@test.com", Role = "Customer", PasswordHash = Hash("test") };
+            var vendorUser = new User { Id = Guid.NewGuid(), Name = "Vendor User", Phone = "8888888888", Email = "vendor@test.com", Role = "Vendor", PasswordHash = Hash("test") };
+            var AdminUser = new User { Id = Guid.NewGuid(), Name = "Admin User", Phone = "8888888888", Email = "admin@test.com", Role = "Admin", PasswordHash = Hash("test") };
+            var SupportUser = new User { Id = Guid.NewGuid(), Name = "Support User", Phone = "8888888888", Email = "support@test.com", Role = "Support", PasswordHash = Hash("test") };
+            db.Users.AddRange(user, vendorUser, AdminUser, SupportUser);
 
             var vendor = new Vendor { Id = Guid.NewGuid(), UserId = vendorUser.Id, BusinessName = "Dream Weddings", Description = "Full service wedding planner", Location = "Hyderabad", IsValidated = true };
             db.Vendors.Add(vendor);
@@ -35,14 +37,14 @@ namespace EventEase.Infrastructure.Data
 
             db.Packages.Add(new Package
             {
-                Id         = Guid.NewGuid(),
-                VendorId   = vendor.Id,
-                Name       = "Wedding Basic",
-                Category   = "Wedding",
-                Pricing    = new PackagePricing { BasePrice = 100000 },
-                Includes   = services.Select(s => s.Name).ToList(),
-                IsActive   = true,
-                Status     = PackageStatus.Active
+                Id = Guid.NewGuid(),
+                VendorId = vendor.Id,
+                Name = "Wedding Basic",
+                Category = "Wedding",
+                Pricing = new PackagePricing { BasePrice = 100000 },
+                Includes = services.Select(s => s.Name).ToList(),
+                IsActive = true,
+                IsVerified = true
             });
 
             db.SaveChanges();
@@ -60,12 +62,12 @@ namespace EventEase.Infrastructure.Data
             {
                 db.Users.Add(new User
                 {
-                    Id           = Guid.NewGuid(),
-                    Name         = "Priya Nair",
-                    Phone        = "9988776655",
-                    Email        = "admin@test.com",
-                    Role         = "Admin",
-                    PasswordHash = Hash("JoinEvents@2025")
+                    Id = Guid.NewGuid(),
+                    Name = "Priya Nair",
+                    Phone = "9988776655",
+                    Email = "admin@test.com",
+                    Role = "Admin",
+                    PasswordHash = Hash("test")
                 });
                 changed = true;
             }
@@ -74,12 +76,12 @@ namespace EventEase.Infrastructure.Data
             {
                 db.Users.Add(new User
                 {
-                    Id           = Guid.NewGuid(),
-                    Name         = "Rahul Support",
-                    Phone        = "9900011223",
-                    Email        = "support@test.com",
-                    Role         = "Support",
-                    PasswordHash = Hash("JoinEvents@2025")
+                    Id = Guid.NewGuid(),
+                    Name = "Rahul Support",
+                    Phone = "9900011223",
+                    Email = "support@test.com",
+                    Role = "Support",
+                    PasswordHash = Hash("test")
                 });
                 changed = true;
             }

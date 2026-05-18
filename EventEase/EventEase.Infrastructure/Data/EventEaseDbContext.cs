@@ -60,10 +60,6 @@ namespace EventEase.Infrastructure.Data
                 b.OwnsOne(p => p.Amenities);
                 b.OwnsMany(p => p.Spaces);
 
-                // Configure Status as an enum stored as int
-                b.Property(p => p.Status)
-                    .HasConversion<int>();
-
                 b.HasMany(p => p.Images)
                  .WithOne(i => i.Package)
                  .HasForeignKey(i => i.PackageId)

@@ -30,7 +30,6 @@ namespace EventEase.Core.Entities
         public ICollection<PackageImage> Images { get; set; } = new List<PackageImage>();
 
         // System managed status fields
-        public PackageStatus Status { get; set; } = PackageStatus.PendingReview;
         public bool IsVerified { get; set; } = false;
         public bool IsActive { get; set; } = true;
         

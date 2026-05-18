@@ -90,18 +90,34 @@ namespace EventEase.Api.Controllers
                         p.TotalReviews,
                         p.CreatedAt,
                         p.UpdatedAt,
-                        p.Status,
                         p.IsVerified,
                         p.IsActive,
                         p.Experience,
-                        // Flatten Owned Types to avoid complex mapping issues
-                        City = p.Address.City,
-                        Address = p.Address,
-                        Pricing = p.Pricing,
-                        Capacity = p.Capacity,
-                        Policies = p.Policies,
-                        Amenities = p.Amenities,
-                        // Do not select Includes or navigation properties here if they cause issues
+                        // Flatten Owned Types to avoid complex mapping/materialization issues
+                        AddressCountry = p.Address.Country,
+                        AddressState = p.Address.State,
+                        AddressCity = p.Address.City,
+                        AddressLocality = p.Address.Locality,
+                        AddressStreet = p.Address.Street,
+                        AddressLandmark = p.Address.Landmark,
+                        AddressPincode = p.Address.Pincode,
+                        PricingVegPrice = p.Pricing.VegPrice,
+                        PricingNonVegPrice = p.Pricing.NonVegPrice,
+                        PricingRoomPrice = p.Pricing.RoomPrice,
+                        PricingBasePrice = p.Pricing.BasePrice,
+                        PricingRent = p.Pricing.Rent,
+                        PricingUnit = p.Pricing.Unit,
+                        CapacityMaxGuests = p.Capacity.MaxGuests,
+                        CapacityParkingCapacity = p.Capacity.ParkingCapacity,
+                        CapacityTotalRooms = p.Capacity.TotalRooms,
+                        PoliciesCateringPolicy = p.Policies.CateringPolicy,
+                        PoliciesDecorPolicy = p.Policies.DecorPolicy,
+                        PoliciesAlcoholPolicy = p.Policies.AlcoholPolicy,
+                        PoliciesDjPolicy = p.Policies.DjPolicy,
+                        AmenitiesHasAc = p.Amenities.HasAc,
+                        AmenitiesHasPowerBackup = p.Amenities.HasPowerBackup,
+                        AmenitiesHasChangingRooms = p.Amenities.HasChangingRooms,
+                        AmenitiesHasParking = p.Amenities.HasParking
                     })
                     .ToListAsync();
 
@@ -123,12 +139,16 @@ namespace EventEase.Api.Controllers
                     .Where(i => packageIds.Contains(i.PackageId))
                     .ToListAsync();
 
-                // Load Spaces - using a simpler query to avoid SelectMany issues
-                var spaces = await _db.Packages
+                // Load Spaces - using SelectMany to avoid nested collection selection issues in SQL Server 2014
+                var spacesDataRaw = await _db.Packages
                     .AsNoTracking()
                     .Where(p => packageIds.Contains(p.Id))
-                    .Select(p => new { p.Id, p.Spaces })
+                    .SelectMany(p => p.Spaces, (p, s) => new { PackageId = p.Id, Space = s })
                     .ToListAsync();
+
+                var spacesDict = spacesDataRaw
+                    .GroupBy(s => s.PackageId)
+                    .ToDictionary(g => g.Key, g => g.Select(x => x.Space).ToList());
 
                 // Map to final Response
                 var responsePackages = packagesData.Select(p => new PackageResponse
@@ -140,62 +160,62 @@ namespace EventEase.Api.Controllers
                     Name = p.Name,
                     Description = p.Description,
                     Theme = p.Theme,
-                    City = p.City,
+                    City = p.AddressCity,
                     Address = new PackageAddressDto
                     {
-                        Country = p.Address.Country,
-                        State = p.Address.State,
-                        City = p.Address.City,
-                        Locality = p.Address.Locality,
-                        Street = p.Address.Street,
-                        Landmark = p.Address.Landmark,
-                        Pincode = p.Address.Pincode
+                        Country = p.AddressCountry ?? "",
+                        State = p.AddressState ?? "",
+                        City = p.AddressCity ?? "",
+                        Locality = p.AddressLocality ?? "",
+                        Street = p.AddressStreet ?? "",
+                        Landmark = p.AddressLandmark ?? "",
+                        Pincode = p.AddressPincode ?? ""
                     },
                     Experience = p.Experience,
                     Pricing = new PackagePricingDto
                     {
-                        VegPrice = p.Pricing.VegPrice,
-                        NonVegPrice = p.Pricing.NonVegPrice,
-                        RoomPrice = p.Pricing.RoomPrice,
-                        BasePrice = p.Pricing.BasePrice,
-                        Rent = p.Pricing.Rent,
-                        Unit = p.Pricing.Unit
+                        VegPrice = p.PricingVegPrice,
+                        NonVegPrice = p.PricingNonVegPrice,
+                        RoomPrice = p.PricingRoomPrice,
+                        BasePrice = p.PricingBasePrice,
+                        Rent = p.PricingRent,
+                        Unit = p.PricingUnit ?? ""
                     },
                     Capacity = new PackageCapacityDto
                     {
-                        MaxGuests = p.Capacity.MaxGuests,
-                        ParkingCapacity = p.Capacity.ParkingCapacity,
-                        TotalRooms = p.Capacity.TotalRooms
+                        MaxGuests = p.CapacityMaxGuests,
+                        ParkingCapacity = p.CapacityParkingCapacity,
+                        TotalRooms = p.CapacityTotalRooms
                     },
                     Policies = new PackagePoliciesDto
                     {
-                        CateringPolicy = p.Policies.CateringPolicy,
-                        DecorPolicy = p.Policies.DecorPolicy,
-                        AlcoholPolicy = p.Policies.AlcoholPolicy,
-                        DjPolicy = p.Policies.DjPolicy
+                        CateringPolicy = p.PoliciesCateringPolicy ?? "",
+                        DecorPolicy = p.PoliciesDecorPolicy ?? "",
+                        AlcoholPolicy = p.PoliciesAlcoholPolicy ?? "",
+                        DjPolicy = p.PoliciesDjPolicy ?? ""
                     },
                     Amenities = new PackageAmenitiesDto
                     {
-                        HasAc = p.Amenities.HasAc,
-                        HasPowerBackup = p.Amenities.HasPowerBackup,
-                        HasChangingRooms = p.Amenities.HasChangingRooms,
-                        HasParking = p.Amenities.HasParking
+                        HasAc = p.AmenitiesHasAc,
+                        HasPowerBackup = p.AmenitiesHasPowerBackup,
+                        HasChangingRooms = p.AmenitiesHasChangingRooms,
+                        HasParking = p.AmenitiesHasParking
                     },
                     Rating = p.Rating,
                     TotalReviews = p.TotalReviews,
-                    Status = p.Status.ToString(),
+                    Status = p.IsVerified ? "Active" : "PendingReview",
                     IsVerified = p.IsVerified,
                     IsActive = p.IsActive,
                     CreatedAt = p.CreatedAt,
                     UpdatedAt = p.UpdatedAt,
                     Images = images.Where(i => i.PackageId == p.Id).Select(i => i.Url).ToList(),
-                    Spaces = spaces.FirstOrDefault(s => s.Id == p.Id)?.Spaces.Select(s => new PackageSpaceDto
+                    Spaces = spacesDict.GetValueOrDefault(p.Id, new List<PackageSpace>()).Select(s => new PackageSpaceDto
                     {
                         Name = s.Name,
                         Type = s.Type,
                         SeatingCapacity = s.SeatingCapacity,
                         FloatingCapacity = s.FloatingCapacity
-                    }).ToList() ?? new List<PackageSpaceDto>(),
+                    }).ToList(),
                     // Load Includes safely - if they were stored as JSON, they might be null or inaccessible in complex queries
                     // For now, we'll try to get them from the original context if needed, but usually they aren't critical for search results
                     Includes = new List<string>() 
@@ -251,16 +271,34 @@ namespace EventEase.Api.Controllers
                         p.TotalReviews,
                         p.CreatedAt,
                         p.UpdatedAt,
-                        p.Status,
                         p.IsVerified,
                         p.IsActive,
                         p.Experience,
-                        City = p.Address.City,
-                        Address = p.Address,
-                        Pricing = p.Pricing,
-                        Capacity = p.Capacity,
-                        Policies = p.Policies,
-                        Amenities = p.Amenities,
+                        // Flatten Owned Types to avoid complex mapping/materialization issues
+                        AddressCountry = p.Address.Country,
+                        AddressState = p.Address.State,
+                        AddressCity = p.Address.City,
+                        AddressLocality = p.Address.Locality,
+                        AddressStreet = p.Address.Street,
+                        AddressLandmark = p.Address.Landmark,
+                        AddressPincode = p.Address.Pincode,
+                        PricingVegPrice = p.Pricing.VegPrice,
+                        PricingNonVegPrice = p.Pricing.NonVegPrice,
+                        PricingRoomPrice = p.Pricing.RoomPrice,
+                        PricingBasePrice = p.Pricing.BasePrice,
+                        PricingRent = p.Pricing.Rent,
+                        PricingUnit = p.Pricing.Unit,
+                        CapacityMaxGuests = p.Capacity.MaxGuests,
+                        CapacityParkingCapacity = p.Capacity.ParkingCapacity,
+                        CapacityTotalRooms = p.Capacity.TotalRooms,
+                        PoliciesCateringPolicy = p.Policies.CateringPolicy,
+                        PoliciesDecorPolicy = p.Policies.DecorPolicy,
+                        PoliciesAlcoholPolicy = p.Policies.AlcoholPolicy,
+                        PoliciesDjPolicy = p.Policies.DjPolicy,
+                        AmenitiesHasAc = p.Amenities.HasAc,
+                        AmenitiesHasPowerBackup = p.Amenities.HasPowerBackup,
+                        AmenitiesHasChangingRooms = p.Amenities.HasChangingRooms,
+                        AmenitiesHasParking = p.Amenities.HasParking,
                         Includes = p.Includes // This might still fail if it's JSON, we'll see
                     })
                     .FirstOrDefaultAsync();
@@ -290,46 +328,46 @@ namespace EventEase.Api.Controllers
                     Name = pData.Name,
                     Description = pData.Description,
                     Theme = pData.Theme,
-                    City = pData.City,
+                    City = pData.AddressCity,
                     Address = new PackageAddressDto
                     {
-                        Country = pData.Address.Country,
-                        State = pData.Address.State,
-                        City = pData.Address.City,
-                        Locality = pData.Address.Locality,
-                        Street = pData.Address.Street,
-                        Landmark = pData.Address.Landmark,
-                        Pincode = pData.Address.Pincode
+                        Country = pData.AddressCountry ?? "",
+                        State = pData.AddressState ?? "",
+                        City = pData.AddressCity ?? "",
+                        Locality = pData.AddressLocality ?? "",
+                        Street = pData.AddressStreet ?? "",
+                        Landmark = pData.AddressLandmark ?? "",
+                        Pincode = pData.AddressPincode ?? ""
                     },
                     Experience = pData.Experience,
                     Pricing = new PackagePricingDto
                     {
-                        VegPrice = pData.Pricing.VegPrice,
-                        NonVegPrice = pData.Pricing.NonVegPrice,
-                        RoomPrice = pData.Pricing.RoomPrice,
-                        BasePrice = pData.Pricing.BasePrice,
-                        Rent = pData.Pricing.Rent,
-                        Unit = pData.Pricing.Unit
+                        VegPrice = pData.PricingVegPrice,
+                        NonVegPrice = pData.PricingNonVegPrice,
+                        RoomPrice = pData.PricingRoomPrice,
+                        BasePrice = pData.PricingBasePrice,
+                        Rent = pData.PricingRent,
+                        Unit = pData.PricingUnit ?? ""
                     },
                     Capacity = new PackageCapacityDto
                     {
-                        MaxGuests = pData.Capacity.MaxGuests,
-                        ParkingCapacity = pData.Capacity.ParkingCapacity,
-                        TotalRooms = pData.Capacity.TotalRooms
+                        MaxGuests = pData.CapacityMaxGuests,
+                        ParkingCapacity = pData.CapacityParkingCapacity,
+                        TotalRooms = pData.CapacityTotalRooms
                     },
                     Policies = new PackagePoliciesDto
                     {
-                        CateringPolicy = pData.Policies.CateringPolicy,
-                        DecorPolicy = pData.Policies.DecorPolicy,
-                        AlcoholPolicy = pData.Policies.AlcoholPolicy,
-                        DjPolicy = pData.Policies.DjPolicy
+                        CateringPolicy = pData.PoliciesCateringPolicy ?? "",
+                        DecorPolicy = pData.PoliciesDecorPolicy ?? "",
+                        AlcoholPolicy = pData.PoliciesAlcoholPolicy ?? "",
+                        DjPolicy = pData.PoliciesDjPolicy ?? ""
                     },
                     Amenities = new PackageAmenitiesDto
                     {
-                        HasAc = pData.Amenities.HasAc,
-                        HasPowerBackup = pData.Amenities.HasPowerBackup,
-                        HasChangingRooms = pData.Amenities.HasChangingRooms,
-                        HasParking = pData.Amenities.HasParking
+                        HasAc = pData.AmenitiesHasAc,
+                        HasPowerBackup = pData.AmenitiesHasPowerBackup,
+                        HasChangingRooms = pData.AmenitiesHasChangingRooms,
+                        HasParking = pData.AmenitiesHasParking
                     },
                     Spaces = spaces.Select(s => new PackageSpaceDto
                     {
@@ -342,7 +380,7 @@ namespace EventEase.Api.Controllers
                     Images = images,
                     Rating = pData.Rating,
                     TotalReviews = pData.TotalReviews,
-                    Status = pData.Status.ToString(),
+                    Status = pData.IsVerified ? "Active" : "PendingReview",
                     IsVerified = pData.IsVerified,
                     IsActive = pData.IsActive,
                     CreatedAt = pData.CreatedAt,

@@ -103,9 +103,10 @@ else
     Console.WriteLine($"[Startup] Successfully loaded Connection String: {maskedConnectionString}");
 }
 
-// ✅ FIXED: Removed UseCompatibilityLevel(120) — was forcing SQL Server 2014 mode on 2022 instance
+// ✅ FIXED: Configured UseCompatibilityLevel(120) to support SQL Server 2014 compatibility mode and prevent 'Incorrect syntax near WITH' (OPENJSON) errors on Contains queries
 builder.Services.AddDbContext<EventEaseDbContext>(o =>
   o.UseSqlServer(connectionString, sql => {
+      sql.UseCompatibilityLevel(120);
       sql.EnableRetryOnFailure(
           maxRetryCount: 5,
           maxRetryDelay: TimeSpan.FromSeconds(30),
