@@ -18,6 +18,7 @@ namespace EventEase.Application.Categories
         public decimal? StartingPrice { get; set; }
         public string? Description { get; set; }
         public List<string>? PopularServices { get; set; }
+        public bool? IsActive { get; set; }
     }
 
     public class UpdateEventCategoryDto
@@ -31,6 +32,7 @@ namespace EventEase.Application.Categories
         public decimal? StartingPrice { get; set; }
         public string? Description { get; set; }
         public List<string>? PopularServices { get; set; }
+        public bool? IsActive { get; set; }
     }
 
     public class ToggleActiveDto

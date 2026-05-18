@@ -367,3 +367,18 @@ secrets/gcp-service-account-key.json
 gcp-service-account-key.json
 **/gcp-*.json
 GOOGLE_APPLICATION_CREDENTIALS
+
+# Environment-specific configuration - NEVER commit these
+appsettings.Development.json
+appsettings.Local.json
+appsettings.Staging.json
+!appsettings.Production.json
+!appsettings.json
+
+# Secrets and sensitive data
+.env
+.env.local
+.env.*.local
+secrets/
+*.key
+*.pem

@@ -54,7 +54,7 @@ namespace EventEase.Application.Categories
                 ColorClass      = dto.ColorClass,
                 StartingPrice   = dto.StartingPrice,
                 Description     = dto.Description?.Trim(),
-                IsActive        = true,
+                IsActive        = dto.IsActive ?? true,
                 CreatedAt       = DateTime.UtcNow,
                 UpdatedAt       = DateTime.UtcNow
             };
@@ -101,6 +101,7 @@ namespace EventEase.Application.Categories
             if (dto.StartingPrice.HasValue)      category.StartingPrice  = dto.StartingPrice;
             if (dto.Description is not null)     category.Description    = dto.Description.Trim();
             if (dto.PopularServices is not null) category.PopularServices = dto.PopularServices;
+            if (dto.IsActive.HasValue)           category.IsActive       = dto.IsActive.Value;
 
             category.UpdatedAt = DateTime.UtcNow;
 
