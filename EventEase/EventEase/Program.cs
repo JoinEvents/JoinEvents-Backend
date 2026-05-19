@@ -156,6 +156,40 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+// Ensure verification columns exist in Packages table
+try
+{
+    using (var scope = app.Services.CreateScope())
+    {
+        var db = scope.ServiceProvider.GetRequiredService<EventEaseDbContext>();
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID(N'[dbo].[Packages]') 
+                AND name = 'VerificationStatus'
+            )
+            BEGIN
+                ALTER TABLE [dbo].[Packages] ADD [VerificationStatus] NVARCHAR(MAX) NOT NULL DEFAULT 'Pending';
+            END");
+
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID(N'[dbo].[Packages]') 
+                AND name = 'VerificationComment'
+            )
+            BEGIN
+                ALTER TABLE [dbo].[Packages] ADD [VerificationComment] NVARCHAR(MAX) NULL;
+            END");
+            
+        Console.WriteLine("[Startup DB Schema Check] Package verification status columns verified/added successfully.");
+    }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"[Startup DB Schema Check Error] Failed to update schema: {ex.Message}");
+}
+
 app.UseCors("AllowAll");
 app.UseSerilogRequestLogging();
 

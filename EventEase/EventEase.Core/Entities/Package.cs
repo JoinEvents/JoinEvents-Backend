@@ -32,6 +32,8 @@ namespace EventEase.Core.Entities
         // System managed status fields
         public bool IsVerified { get; set; } = false;
         public bool IsActive { get; set; } = true;
+        public string VerificationStatus { get; set; } = "Pending";
+        public string? VerificationComment { get; set; }
         
         // Aggregates
         public double Rating { get; set; } = 0.0;

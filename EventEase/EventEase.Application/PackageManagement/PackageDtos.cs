@@ -101,6 +101,8 @@ namespace EventEase.Application.PackageManagement
         public string Status { get; set; } = string.Empty;
         public bool IsVerified { get; set; }
         public bool IsActive { get; set; }
+        public string VerificationStatus { get; set; } = "Pending";
+        public string? VerificationComment { get; set; }
         public DateTime CreatedAt { get; set; }
         public DateTime UpdatedAt { get; set; }
     }

@@ -112,6 +112,8 @@ namespace EventEase.Api.Controllers
                 }).ToList(),
                 IsVerified = false,
                 IsActive = true,
+                VerificationStatus = "Pending",
+                VerificationComment = null,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
@@ -127,13 +129,37 @@ namespace EventEase.Api.Controllers
             _db.Packages.Add(package);
             await _db.SaveChangesAsync();
 
+            // Add notification for Support members
+            try
+            {
+                var supportUser = await _db.Users.FirstOrDefaultAsync(u => u.Role == "Support" || u.Email == "support@test.com");
+                if (supportUser != null)
+                {
+                    _db.Notifications.Add(new Notification
+                    {
+                        Id = Guid.NewGuid(),
+                        UserId = supportUser.Id,
+                        Title = "New Package Submitted",
+                        Message = $"Package '{package.Name}' has been submitted by vendor and is awaiting verification.",
+                        Type = "verification",
+                        IsRead = false,
+                        CreatedAt = DateTime.UtcNow
+                    });
+                    await _db.SaveChangesAsync();
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Serilog.Log.Warning(ex, "Failed to create support notification for new package");
+            }
+
             return Created($"/api/v1/vendor/packages/{package.Id}", new
             {
                 id = $"pkg_{package.Id:N}",
                 vendorId = $"usr_{vendorId:N}",
                 name = package.Name,
                 category = package.Category,
-                status = package.IsVerified ? "Active" : "PendingReview",
+                status = "PendingReview",
                 isVerified = package.IsVerified,
                 isActive = package.IsActive,
                 createdAt = package.CreatedAt
@@ -417,15 +443,41 @@ namespace EventEase.Api.Controllers
             }
 
             package.IsVerified = false;
+            package.VerificationStatus = "Pending";
+            package.VerificationComment = null;
             package.UpdatedAt = DateTime.UtcNow;
 
             await _db.SaveChangesAsync();
+
+            // Add notification for Support members
+            try
+            {
+                var supportUser = await _db.Users.FirstOrDefaultAsync(u => u.Role == "Support" || u.Email == "support@test.com");
+                if (supportUser != null)
+                {
+                    _db.Notifications.Add(new Notification
+                    {
+                        Id = Guid.NewGuid(),
+                        UserId = supportUser.Id,
+                        Title = "Package Resubmitted",
+                        Message = $"Package '{package.Name}' has been updated and is awaiting verification.",
+                        Type = "verification",
+                        IsRead = false,
+                        CreatedAt = DateTime.UtcNow
+                    });
+                    await _db.SaveChangesAsync();
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Serilog.Log.Warning(ex, "Failed to create support notification for updated package");
+            }
 
             return Ok(new
             {
                 id = $"pkg_{package.Id:N}",
                 name = package.Name,
-                status = package.IsVerified ? "Active" : "PendingReview",
+                status = "PendingReview",
                 isVerified = package.IsVerified,
                 updatedAt = package.UpdatedAt
             });
@@ -617,7 +669,9 @@ namespace EventEase.Api.Controllers
                 Images = p.Images?.Select(i => i.Url).ToList() ?? new System.Collections.Generic.List<string>(),
                 Rating = p.Rating,
                 TotalReviews = p.TotalReviews,
-                Status = p.IsVerified ? "Active" : "PendingReview",
+                Status = p.IsVerified ? "Active" : p.VerificationStatus == "Rejected" ? "Rejected" : "PendingReview",
+                VerificationStatus = p.VerificationStatus,
+                VerificationComment = p.VerificationComment,
                 IsVerified = p.IsVerified,
                 IsActive = p.IsActive,
                 CreatedAt = p.CreatedAt,

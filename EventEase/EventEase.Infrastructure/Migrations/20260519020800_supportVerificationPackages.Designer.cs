@@ -4,6 +4,7 @@ using EventEase.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace EventEase.Infrastructure.Migrations
 {
     [DbContext(typeof(EventEaseDbContext))]
-    partial class EventEaseDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260519020800_supportVerificationPackages")]
+    partial class supportVerificationPackages
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -57,7 +60,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Bids", (string)null);
+                    b.ToTable("Bids");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.Booking", b =>
@@ -88,7 +91,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Bookings", (string)null);
+                    b.ToTable("Bookings");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.BookingLog", b =>
@@ -113,7 +116,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("BookingLogs", (string)null);
+                    b.ToTable("BookingLogs");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.Chat", b =>
@@ -137,7 +140,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Chats", (string)null);
+                    b.ToTable("Chats");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.ChatMessage", b =>
@@ -161,7 +164,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("ChatMessages", (string)null);
+                    b.ToTable("ChatMessages");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.ChatThread", b =>
@@ -194,7 +197,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("ChatThreads", (string)null);
+                    b.ToTable("ChatThreads");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.EventCategory", b =>
@@ -249,7 +252,7 @@ namespace EventEase.Infrastructure.Migrations
                     b.HasIndex("CategoryKey")
                         .IsUnique();
 
-                    b.ToTable("EventCategories", (string)null);
+                    b.ToTable("EventCategories");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.Notification", b =>
@@ -281,7 +284,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Notifications", (string)null);
+                    b.ToTable("Notifications");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.Package", b =>
@@ -343,7 +346,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Packages", (string)null);
+                    b.ToTable("Packages");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.PackageImage", b =>
@@ -365,7 +368,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasIndex("PackageId");
 
-                    b.ToTable("PackageImages", (string)null);
+                    b.ToTable("PackageImages");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.Payment", b =>
@@ -397,7 +400,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Payments", (string)null);
+                    b.ToTable("Payments");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.RefreshToken", b =>
@@ -471,7 +474,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Rfps", (string)null);
+                    b.ToTable("Rfps");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.Service", b =>
@@ -524,7 +527,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasIndex("VendorId");
 
-                    b.ToTable("Services", (string)null);
+                    b.ToTable("Services");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.User", b =>
@@ -572,7 +575,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Users", (string)null);
+                    b.ToTable("Users");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.Vendor", b =>
@@ -607,7 +610,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Vendors", (string)null);
+                    b.ToTable("Vendors");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.VendorDocument", b =>
@@ -646,12 +649,12 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("VendorDocuments", (string)null);
+                    b.ToTable("VendorDocuments");
                 });
 
             modelBuilder.Entity("EventEase.Core.Entities.Package", b =>
                 {
-                    b.OwnsOne("EventEase.Core.Entities.Package.Address#EventEase.Core.Entities.PackageAddress", "Address", b1 =>
+                    b.OwnsOne("EventEase.Core.Entities.PackageAddress", "Address", b1 =>
                         {
                             b1.Property<Guid>("PackageId")
                                 .HasColumnType("uniqueidentifier");
@@ -686,13 +689,13 @@ namespace EventEase.Infrastructure.Migrations
 
                             b1.HasKey("PackageId");
 
-                            b1.ToTable("Packages", (string)null);
+                            b1.ToTable("Packages");
 
                             b1.WithOwner()
                                 .HasForeignKey("PackageId");
                         });
 
-                    b.OwnsOne("EventEase.Core.Entities.Package.Amenities#EventEase.Core.Entities.PackageAmenities", "Amenities", b1 =>
+                    b.OwnsOne("EventEase.Core.Entities.PackageAmenities", "Amenities", b1 =>
                         {
                             b1.Property<Guid>("PackageId")
                                 .HasColumnType("uniqueidentifier");
@@ -711,13 +714,13 @@ namespace EventEase.Infrastructure.Migrations
 
                             b1.HasKey("PackageId");
 
-                            b1.ToTable("Packages", (string)null);
+                            b1.ToTable("Packages");
 
                             b1.WithOwner()
                                 .HasForeignKey("PackageId");
                         });
 
-                    b.OwnsOne("EventEase.Core.Entities.Package.Capacity#EventEase.Core.Entities.PackageCapacity", "Capacity", b1 =>
+                    b.OwnsOne("EventEase.Core.Entities.PackageCapacity", "Capacity", b1 =>
                         {
                             b1.Property<Guid>("PackageId")
                                 .HasColumnType("uniqueidentifier");
@@ -733,13 +736,13 @@ namespace EventEase.Infrastructure.Migrations
 
                             b1.HasKey("PackageId");
 
-                            b1.ToTable("Packages", (string)null);
+                            b1.ToTable("Packages");
 
                             b1.WithOwner()
                                 .HasForeignKey("PackageId");
                         });
 
-                    b.OwnsOne("EventEase.Core.Entities.Package.Policies#EventEase.Core.Entities.PackagePolicies", "Policies", b1 =>
+                    b.OwnsOne("EventEase.Core.Entities.PackagePolicies", "Policies", b1 =>
                         {
                             b1.Property<Guid>("PackageId")
                                 .HasColumnType("uniqueidentifier");
@@ -762,13 +765,13 @@ namespace EventEase.Infrastructure.Migrations
 
                             b1.HasKey("PackageId");
 
-                            b1.ToTable("Packages", (string)null);
+                            b1.ToTable("Packages");
 
                             b1.WithOwner()
                                 .HasForeignKey("PackageId");
                         });
 
-                    b.OwnsOne("EventEase.Core.Entities.Package.Pricing#EventEase.Core.Entities.PackagePricing", "Pricing", b1 =>
+                    b.OwnsOne("EventEase.Core.Entities.PackagePricing", "Pricing", b1 =>
                         {
                             b1.Property<Guid>("PackageId")
                                 .HasColumnType("uniqueidentifier");
@@ -799,13 +802,13 @@ namespace EventEase.Infrastructure.Migrations
 
                             b1.HasKey("PackageId");
 
-                            b1.ToTable("Packages", (string)null);
+                            b1.ToTable("Packages");
 
                             b1.WithOwner()
                                 .HasForeignKey("PackageId");
                         });
 
-                    b.OwnsMany("EventEase.Core.Entities.Package.Spaces#EventEase.Core.Entities.PackageSpace", "Spaces", b1 =>
+                    b.OwnsMany("EventEase.Core.Entities.PackageSpace", "Spaces", b1 =>
                         {
                             b1.Property<Guid>("PackageId")
                                 .HasColumnType("uniqueidentifier");
@@ -832,7 +835,7 @@ namespace EventEase.Infrastructure.Migrations
 
                             b1.HasKey("PackageId", "Id");
 
-                            b1.ToTable("PackageSpace", (string)null);
+                            b1.ToTable("PackageSpace");
 
                             b1.WithOwner()
                                 .HasForeignKey("PackageId");
