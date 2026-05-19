@@ -38,59 +38,75 @@ namespace EventEase.Api.Controllers
         [HttpPost]
         public async Task<IActionResult> CreatePackage([FromBody] CreatePackageRequest request)
         {
+            if (request == null)
+            {
+                return BadRequest(new { error = "Request body cannot be null" });
+            }
+
             var vendorId = GetUserId();
+            
+            // Extract safely using local variables to prevent NullReferenceException on omitted JSON fields
+            var addressDto = request.Address ?? new PackageAddressDto();
+            var pricingDto = request.Pricing ?? new PackagePricingDto();
+            var capacityDto = request.Capacity ?? new PackageCapacityDto();
+            var policiesDto = request.Policies ?? new PackagePoliciesDto();
+            var amenitiesDto = request.Amenities ?? new PackageAmenitiesDto();
+            var spacesList = request.Spaces ?? new List<PackageSpaceDto>();
+            var includesList = request.Includes ?? new List<string>();
+            var imagesList = request.Images ?? new List<string>();
+
             var package = new Package
             {
                 VendorId = vendorId,
-                Category = request.Category,
-                Name = request.Name,
-                Description = request.Description,
-                Theme = request.Theme,
+                Category = request.Category ?? string.Empty,
+                Name = request.Name ?? string.Empty,
+                Description = request.Description ?? string.Empty,
+                Theme = request.Theme ?? string.Empty,
                 Experience = request.Experience,
-                Includes = request.Includes,
+                Includes = includesList,
                 Address = new PackageAddress
                 {
-                    Country = request.Address.Country,
-                    State = request.Address.State,
-                    City = request.Address.City,
-                    Locality = request.Address.Locality,
-                    Street = request.Address.Street,
-                    Landmark = request.Address.Landmark,
-                    Pincode = request.Address.Pincode
+                    Country = addressDto.Country ?? string.Empty,
+                    State = addressDto.State ?? string.Empty,
+                    City = addressDto.City ?? string.Empty,
+                    Locality = addressDto.Locality ?? string.Empty,
+                    Street = addressDto.Street ?? string.Empty,
+                    Landmark = addressDto.Landmark ?? string.Empty,
+                    Pincode = addressDto.Pincode ?? string.Empty
                 },
                 Pricing = new PackagePricing
                 {
-                    VegPrice = request.Pricing.VegPrice,
-                    NonVegPrice = request.Pricing.NonVegPrice,
-                    RoomPrice = request.Pricing.RoomPrice,
-                    BasePrice = request.Pricing.BasePrice,
-                    Rent = request.Pricing.Rent,
-                    Unit = request.Pricing.Unit
+                    VegPrice = pricingDto.VegPrice,
+                    NonVegPrice = pricingDto.NonVegPrice,
+                    RoomPrice = pricingDto.RoomPrice,
+                    BasePrice = pricingDto.BasePrice,
+                    Rent = pricingDto.Rent,
+                    Unit = pricingDto.Unit ?? string.Empty
                 },
                 Capacity = new PackageCapacity
                 {
-                    MaxGuests = request.Capacity.MaxGuests,
-                    ParkingCapacity = request.Capacity.ParkingCapacity,
-                    TotalRooms = request.Capacity.TotalRooms
+                    MaxGuests = capacityDto.MaxGuests,
+                    ParkingCapacity = capacityDto.ParkingCapacity,
+                    TotalRooms = capacityDto.TotalRooms
                 },
                 Policies = new PackagePolicies
                 {
-                    CateringPolicy = request.Policies.CateringPolicy,
-                    DecorPolicy = request.Policies.DecorPolicy,
-                    AlcoholPolicy = request.Policies.AlcoholPolicy,
-                    DjPolicy = request.Policies.DjPolicy
+                    CateringPolicy = policiesDto.CateringPolicy ?? string.Empty,
+                    DecorPolicy = policiesDto.DecorPolicy ?? string.Empty,
+                    AlcoholPolicy = policiesDto.AlcoholPolicy ?? string.Empty,
+                    DjPolicy = policiesDto.DjPolicy ?? string.Empty
                 },
                 Amenities = new PackageAmenities
                 {
-                    HasAc = request.Amenities.HasAc,
-                    HasPowerBackup = request.Amenities.HasPowerBackup,
-                    HasChangingRooms = request.Amenities.HasChangingRooms,
-                    HasParking = request.Amenities.HasParking
+                    HasAc = amenitiesDto.HasAc,
+                    HasPowerBackup = amenitiesDto.HasPowerBackup,
+                    HasChangingRooms = amenitiesDto.HasChangingRooms,
+                    HasParking = amenitiesDto.HasParking
                 },
-                Spaces = request.Spaces.Select(s => new PackageSpace
+                Spaces = spacesList.Select(s => new PackageSpace
                 {
-                    Name = s.Name,
-                    Type = s.Type,
+                    Name = s.Name ?? string.Empty,
+                    Type = s.Type ?? string.Empty,
                     SeatingCapacity = s.SeatingCapacity,
                     FloatingCapacity = s.FloatingCapacity
                 }).ToList(),
@@ -100,9 +116,12 @@ namespace EventEase.Api.Controllers
                 UpdatedAt = DateTime.UtcNow
             };
 
-            foreach (var imgUrl in request.Images)
+            foreach (var imgUrl in imagesList)
             {
-                package.Images.Add(new PackageImage { Url = imgUrl, PackageId = package.Id, IsMain = package.Images.Count == 0 });
+                if (!string.IsNullOrEmpty(imgUrl))
+                {
+                    package.Images.Add(new PackageImage { Url = imgUrl, PackageId = package.Id, IsMain = package.Images.Count == 0 });
+                }
             }
 
             _db.Packages.Add(package);
@@ -287,6 +306,11 @@ namespace EventEase.Api.Controllers
         [HttpPut("{packageId}")]
         public async Task<IActionResult> UpdatePackage(string packageId, [FromBody] UpdatePackageRequest request)
         {
+            if (request == null)
+            {
+                return BadRequest(new { error = "Request body cannot be null" });
+            }
+
             var vendorId = GetUserId();
             if (!packageId.StartsWith("pkg_") || !Guid.TryParse(packageId.Substring(4), out var guid))
                 return NotFound(new { error = "Package not found" });
@@ -303,75 +327,92 @@ namespace EventEase.Api.Controllers
             package.Description = request.Description ?? package.Description;
             package.Theme = request.Theme ?? package.Theme;
             package.Experience = request.Experience;
-            package.Includes = request.Includes;
+            
+            if (request.Includes != null)
+            {
+                package.Includes = request.Includes;
+            }
 
             if (request.Address != null)
             {
-                package.Address.Country = request.Address.Country;
-                package.Address.State = request.Address.State;
-                package.Address.City = request.Address.City;
-                package.Address.Locality = request.Address.Locality;
-                package.Address.Street = request.Address.Street;
-                package.Address.Landmark = request.Address.Landmark;
-                package.Address.Pincode = request.Address.Pincode;
+                package.Address ??= new PackageAddress();
+                package.Address.Country = request.Address.Country ?? package.Address.Country ?? string.Empty;
+                package.Address.State = request.Address.State ?? package.Address.State ?? string.Empty;
+                package.Address.City = request.Address.City ?? package.Address.City ?? string.Empty;
+                package.Address.Locality = request.Address.Locality ?? package.Address.Locality ?? string.Empty;
+                package.Address.Street = request.Address.Street ?? package.Address.Street ?? string.Empty;
+                package.Address.Landmark = request.Address.Landmark ?? package.Address.Landmark ?? string.Empty;
+                package.Address.Pincode = request.Address.Pincode ?? package.Address.Pincode ?? string.Empty;
             }
 
             if (request.Pricing != null)
             {
-                package.Pricing.VegPrice = request.Pricing.VegPrice;
-                package.Pricing.NonVegPrice = request.Pricing.NonVegPrice;
-                package.Pricing.RoomPrice = request.Pricing.RoomPrice;
-                package.Pricing.BasePrice = request.Pricing.BasePrice;
-                package.Pricing.Rent = request.Pricing.Rent;
-                package.Pricing.Unit = request.Pricing.Unit;
+                package.Pricing ??= new PackagePricing();
+                package.Pricing.VegPrice = request.Pricing.VegPrice ?? package.Pricing.VegPrice;
+                package.Pricing.NonVegPrice = request.Pricing.NonVegPrice ?? package.Pricing.NonVegPrice;
+                package.Pricing.RoomPrice = request.Pricing.RoomPrice ?? package.Pricing.RoomPrice;
+                package.Pricing.BasePrice = request.Pricing.BasePrice ?? package.Pricing.BasePrice;
+                package.Pricing.Rent = request.Pricing.Rent ?? package.Pricing.Rent;
+                package.Pricing.Unit = request.Pricing.Unit ?? package.Pricing.Unit ?? string.Empty;
             }
 
             if (request.Capacity != null)
             {
-                package.Capacity.MaxGuests = request.Capacity.MaxGuests;
-                package.Capacity.ParkingCapacity = request.Capacity.ParkingCapacity;
-                package.Capacity.TotalRooms = request.Capacity.TotalRooms;
+                package.Capacity ??= new PackageCapacity();
+                package.Capacity.MaxGuests = request.Capacity.MaxGuests ?? package.Capacity.MaxGuests;
+                package.Capacity.ParkingCapacity = request.Capacity.ParkingCapacity ?? package.Capacity.ParkingCapacity;
+                package.Capacity.TotalRooms = request.Capacity.TotalRooms ?? package.Capacity.TotalRooms;
             }
 
             if (request.Policies != null)
             {
-                package.Policies.CateringPolicy = request.Policies.CateringPolicy;
-                package.Policies.DecorPolicy = request.Policies.DecorPolicy;
-                package.Policies.AlcoholPolicy = request.Policies.AlcoholPolicy;
-                package.Policies.DjPolicy = request.Policies.DjPolicy;
+                package.Policies ??= new PackagePolicies();
+                package.Policies.CateringPolicy = request.Policies.CateringPolicy ?? package.Policies.CateringPolicy ?? string.Empty;
+                package.Policies.DecorPolicy = request.Policies.DecorPolicy ?? package.Policies.DecorPolicy ?? string.Empty;
+                package.Policies.AlcoholPolicy = request.Policies.AlcoholPolicy ?? package.Policies.AlcoholPolicy ?? string.Empty;
+                package.Policies.DjPolicy = request.Policies.DjPolicy ?? package.Policies.DjPolicy ?? string.Empty;
             }
 
             if (request.Amenities != null)
             {
+                package.Amenities ??= new PackageAmenities();
                 package.Amenities.HasAc = request.Amenities.HasAc;
                 package.Amenities.HasPowerBackup = request.Amenities.HasPowerBackup;
                 package.Amenities.HasChangingRooms = request.Amenities.HasChangingRooms;
                 package.Amenities.HasParking = request.Amenities.HasParking;
             }
 
-            if (request.Spaces != null && request.Spaces.Any())
+            if (request.Spaces != null)
             {
                 package.Spaces.Clear();
                 foreach (var s in request.Spaces)
                 {
-                    package.Spaces.Add(new PackageSpace
+                    if (s != null)
                     {
-                        Name = s.Name,
-                        Type = s.Type,
-                        SeatingCapacity = s.SeatingCapacity,
-                        FloatingCapacity = s.FloatingCapacity
-                    });
+                        package.Spaces.Add(new PackageSpace
+                        {
+                            Name = s.Name ?? string.Empty,
+                            Type = s.Type ?? string.Empty,
+                            SeatingCapacity = s.SeatingCapacity,
+                            FloatingCapacity = s.FloatingCapacity
+                        });
+                    }
                 }
             }
 
-            if (request.Images != null && request.Images.Any())
+            if (request.Images != null)
             {
-                // Remove existing ones not in the new list, or simple replace
-                _db.PackageImages.RemoveRange(package.Images);
+                // Remove existing ones safely from db first, preventing database orphans
+                var existingImages = await _db.PackageImages.Where(i => i.PackageId == guid).ToListAsync();
+                _db.PackageImages.RemoveRange(existingImages);
+                
                 package.Images.Clear();
                 foreach (var imgUrl in request.Images)
                 {
-                    package.Images.Add(new PackageImage { Url = imgUrl, PackageId = package.Id, IsMain = package.Images.Count == 0 });
+                    if (!string.IsNullOrEmpty(imgUrl))
+                    {
+                        package.Images.Add(new PackageImage { Url = imgUrl, PackageId = package.Id, IsMain = package.Images.Count == 0 });
+                    }
                 }
             }
 
