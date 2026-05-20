@@ -202,7 +202,8 @@ namespace EventEase.Api.Controllers
                     Pricing = p.Pricing,
                     Capacity = p.Capacity,
                     Policies = p.Policies,
-                    Amenities = p.Amenities
+                    Amenities = p.Amenities,
+                    Includes = p.Includes
                 }).ToListAsync();
 
                 var packages = rawData.Select(d => new Package
@@ -224,7 +225,8 @@ namespace EventEase.Api.Controllers
                     Pricing = d.Pricing,
                     Capacity = d.Capacity,
                     Policies = d.Policies,
-                    Amenities = d.Amenities
+                    Amenities = d.Amenities,
+                    Includes = d.Includes ?? new List<string>()
                 })
                 .OrderByDescending(p => p.CreatedAt)
                 .Skip((page - 1) * pageSize)

@@ -117,7 +117,8 @@ namespace EventEase.Api.Controllers
                         AmenitiesHasAc = p.Amenities.HasAc,
                         AmenitiesHasPowerBackup = p.Amenities.HasPowerBackup,
                         AmenitiesHasChangingRooms = p.Amenities.HasChangingRooms,
-                        AmenitiesHasParking = p.Amenities.HasParking
+                        AmenitiesHasParking = p.Amenities.HasParking,
+                        Includes = p.Includes
                     })
                     .ToListAsync();
 
@@ -218,7 +219,7 @@ namespace EventEase.Api.Controllers
                     }).ToList(),
                     // Load Includes safely - if they were stored as JSON, they might be null or inaccessible in complex queries
                     // For now, we'll try to get them from the original context if needed, but usually they aren't critical for search results
-                    Includes = new List<string>() 
+                    Includes = p.Includes ?? new List<string>()
                 }).ToList();
 
                 return Ok(new PackageSearchResponse
