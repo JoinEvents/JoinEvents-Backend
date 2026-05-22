@@ -15,5 +15,14 @@ namespace EventEase.Core.Entities
         public DateTime EventDate { get; set; }
         public string Status { get; set; } = "Pending"; // Pending, Accepted, Rejected, Paid, Cancelled
         public decimal Amount { get; set; }
+        public decimal TotalAmount { get; set; } = 0;
+        public decimal AdvanceAmount { get; set; } = 0;
+        public decimal DamageCharges { get; set; } = 0;
+        public string? DamageChargeNotes { get; set; }
+        public bool IsDamageChargeApproved { get; set; } = false;
+        public decimal ExtraServicesAmount { get; set; } = 0;
+        public decimal? FinalPaidAmount { get; set; }
+        public string? CancelledBy { get; set; }
+        public string? CancellationReason { get; set; }
     }
 }

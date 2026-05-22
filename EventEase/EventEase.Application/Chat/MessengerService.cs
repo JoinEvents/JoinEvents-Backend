@@ -27,27 +27,27 @@ namespace EventEase.Application.Chat
                 var recipientId = isCustomer ? t.VendorId : t.CustomerId;
 
                 var recipient = await _db.Users.FindAsync(recipientId);
-                var recipientName = recipient?.Name ?? "Amit Sharma";
+                var recipientName = recipient?.Name ?? "Unknown";
+
+                var lastMsg = await _db.ChatMessages
+                    .Where(m => m.ThreadId == t.Id)
+                    .OrderByDescending(m => m.Timestamp)
+                    .FirstOrDefaultAsync();
+
+                var displayUnreadCount = 0;
+                if (lastMsg != null && lastMsg.SenderId != userId)
+                {
+                    displayUnreadCount = t.UnreadCount;
+                }
 
                 results.Add(new ThreadPreviewResponse(
-                    "th_" + t.Id.ToString().Substring(0, 8),
-                    isCustomer ? "usr_v1" : "usr_c1",
+                    t.Id.ToString(),
+                    recipientId.ToString(),
                     recipientName,
                     t.LastMessage ?? "We have sent the menu draft for approval...",
-                    t.UnreadCount,
-                    t.UpdatedAt
-                ));
-            }
-
-            if (results.Count == 0)
-            {
-                results.Add(new ThreadPreviewResponse(
-                    "th_887766",
-                    "usr_v1",
-                    "Amit Sharma",
-                    "We have sent the menu draft for approval...",
-                    2,
-                    DateTime.UtcNow
+                    displayUnreadCount,
+                    t.UpdatedAt,
+                    t.Status
                 ));
             }
 
@@ -83,12 +83,13 @@ namespace EventEase.Application.Chat
 
             thread.LastMessage = dto.Content;
             thread.UpdatedAt = DateTime.UtcNow;
+            thread.UnreadCount += 1;
 
             await _db.SaveChangesAsync();
 
             return new MessageResponse(
-                "msg_" + msg.Id.ToString().Substring(0, 8),
-                "th_" + thread.Id.ToString().Substring(0, 8),
+                msg.Id.ToString(),
+                thread.Id.ToString(),
                 senderId.ToString(),
                 msg.Content,
                 msg.Timestamp
@@ -132,8 +133,8 @@ namespace EventEase.Application.Chat
                 .ToListAsync();
 
             return messages.Select(m => new MessageResponse(
-                "msg_" + m.Id.ToString().Substring(0, 8),
-                "th_" + m.ThreadId.ToString().Substring(0, 8),
+                m.Id.ToString(),
+                m.ThreadId.ToString(),
                 m.SenderId.ToString(),
                 m.Content,
                 m.Timestamp
@@ -155,9 +156,17 @@ namespace EventEase.Application.Chat
                     RfpId = rfpId,
                     Status = "Pending",
                     LastMessage = initialMessage,
-                    UpdatedAt = DateTime.UtcNow
+                    UpdatedAt = DateTime.UtcNow,
+                    UnreadCount = string.IsNullOrEmpty(initialMessage) ? 0 : 1
                 };
                 _db.ChatThreads.Add(thread);
+            }
+            else
+            {
+                if (!string.IsNullOrEmpty(initialMessage))
+                {
+                    thread.UnreadCount += 1;
+                }
             }
 
             if (!string.IsNullOrEmpty(initialMessage))
@@ -197,6 +206,16 @@ namespace EventEase.Application.Chat
 
             thread.Status = "Rejected";
             thread.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
+            return true;
+        }
+
+        public async Task<bool> MarkAsReadAsync(Guid threadId, Guid userId)
+        {
+            var thread = await _db.ChatThreads.FindAsync(threadId);
+            if (thread == null) return false;
+
+            thread.UnreadCount = 0;
             await _db.SaveChangesAsync();
             return true;
         }

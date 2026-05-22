@@ -243,6 +243,15 @@ namespace EventEase.Api.Controllers
         }
 
         [Authorize]
+        [HttpPost("/api/v1/messenger/threads/{threadId:guid}/read")]
+        public async Task<IActionResult> MarkChatRead(Guid threadId)
+        {
+            var userId = GetUserId();
+            var ok = await _messenger.MarkAsReadAsync(threadId, userId);
+            return ok ? Ok(new { success = true }) : NotFound();
+        }
+
+        [Authorize]
         [HttpPost("/api/v1/messenger/threads/{threadId:guid}/messages")]
         public async Task<IActionResult> SendMessage(Guid threadId, [FromBody] SendMessageRequest dto)
         {

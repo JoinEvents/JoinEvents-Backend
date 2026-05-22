@@ -14,5 +14,6 @@ namespace EventEase.Application.Chat
         Task<Guid> RequestChatAsync(Guid customerId, Guid vendorId, Guid? rfpId, string? initialMessage);
         Task<bool> AcceptChatAsync(Guid threadId);
         Task<bool> RejectChatAsync(Guid threadId);
+        Task<bool> MarkAsReadAsync(Guid threadId, Guid userId);
     }
 }
