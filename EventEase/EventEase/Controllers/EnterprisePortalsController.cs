@@ -279,7 +279,7 @@ namespace EventEase.Api.Controllers
             var list = await _notifications.GetNotificationsAsync(userId);
             var formatted = list.Select(n => new
             {
-                id = "notif_" + n.Id.ToString().Substring(0, 6),
+                id = "notif_" + n.Id.ToString(),
                 title = n.Title,
                 message = n.Message,
                 type = n.Type,
@@ -300,6 +300,32 @@ namespace EventEase.Api.Controllers
                 success = true,
                 markedCount = count
             });
+        }
+
+        [Authorize]
+        [HttpDelete("/api/v1/notifications/{id}")]
+        public async Task<IActionResult> DeleteNotification(string id)
+        {
+            var userId = GetUserId();
+            var cleanIdStr = id.StartsWith("notif_") ? id.Substring(6) : id;
+            
+            if (Guid.TryParse(cleanIdStr, out var guid))
+            {
+                var ok = await _notifications.DeleteNotificationAsync(guid, userId);
+                if (!ok) return NotFound(new { error = "Notification not found" });
+                return Ok(new { success = true });
+            }
+            
+            return Ok(new { success = true });
+        }
+
+        [Authorize]
+        [HttpDelete("/api/v1/notifications/clear-all")]
+        public async Task<IActionResult> ClearAllNotifications()
+        {
+            var userId = GetUserId();
+            var count = await _notifications.ClearAllNotificationsAsync(userId);
+            return Ok(new { success = true, clearedCount = count });
         }
 
         // --- HELPERS ---

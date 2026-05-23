@@ -9,5 +9,7 @@ namespace EventEase.Application.Services
     {
         Task<List<Notification>> GetNotificationsAsync(Guid userId);
         Task<int> MarkAllAsReadAsync(Guid userId);
+        Task<bool> DeleteNotificationAsync(Guid id, Guid userId);
+        Task<int> ClearAllNotificationsAsync(Guid userId);
     }
 }

@@ -93,13 +93,41 @@ namespace EventEase.Application.Auth
                 ReferredById = referrerId
             };
             
+            if (user.Role.Equals("Customer", StringComparison.OrdinalIgnoreCase))
+            {
+                user.LoyaltyPoints += 200;
+                _db.Set<LoyaltyTransaction>().Add(new LoyaltyTransaction 
+                { 
+                    UserId = user.Id, 
+                    Points = 200, 
+                    Type = "earned", 
+                    Description = "Welcome Bonus", 
+                    Date = DateTime.UtcNow 
+                });
+            }
+
             if (referrer != null)
             {
-                user.LoyaltyPoints += 500;
                 referrer.LoyaltyPoints += 500;
-                
-                _db.Set<LoyaltyTransaction>().Add(new LoyaltyTransaction { UserId = user.Id, Points = 500, Type = "earned", Description = "Sign-up via Referral", Date = DateTime.UtcNow });
-                _db.Set<LoyaltyTransaction>().Add(new LoyaltyTransaction { UserId = referrer.Id, Points = 500, Type = "earned", Description = "Referral Bonus", Date = DateTime.UtcNow });
+                _db.Set<LoyaltyTransaction>().Add(new LoyaltyTransaction 
+                { 
+                    UserId = referrer.Id, 
+                    Points = 500, 
+                    Type = "earned", 
+                    Description = "Referral Bonus", 
+                    Date = DateTime.UtcNow 
+                });
+
+                _db.Set<Notification>().Add(new Notification
+                {
+                    Id = Guid.NewGuid(),
+                    UserId = referrer.Id,
+                    Title = "Referral Reward Credited",
+                    Message = "You got 500 points on the new registration with your reference.",
+                    Type = "general",
+                    IsRead = false,
+                    CreatedAt = DateTime.UtcNow
+                });
             }
 
             _db.Users.Add(user);

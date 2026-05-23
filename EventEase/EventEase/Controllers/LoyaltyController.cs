@@ -93,15 +93,12 @@ namespace EventEase.Controllers
 
             try
             {
-                // Credit 500 points for successful referral
-                string description = $"Referral Bonus: {request.FriendEmail} successfully registered & booked";
-                await _loyaltyService.AddPointsAsync(request.UserId, 500, description);
-                
+                // Do NOT credit points immediately. Invitation sent.
                 var balance = await _loyaltyService.GetBalanceAsync(request.UserId);
                 return Ok(new ReferFriendResponseDto
                 {
                     Success = true,
-                    PointsEarned = 500,
+                    PointsEarned = 0,
                     NewBalance = balance.Points,
                     NewTier = balance.Tier
                 });

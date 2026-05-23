@@ -324,8 +324,8 @@ namespace EventEase.Api.Controllers
                     CreatedAt = DateTime.UtcNow
                 });
 
-                // Award points: 20 points for every ₹100 spent (aligned with the 1 point = ₹5 rule)
-                int pointsEarned = (int)(booking.Amount / 100) * 20;
+                // Award points: 10 points for every ₹100 spent
+                int pointsEarned = (int)(booking.Amount / 100) * 10;
                 if (pointsEarned > 0)
                 {
                     string description = $"Earned points for Booking BK-{booking.Id.ToString().Substring(0, 8).ToUpper()}";

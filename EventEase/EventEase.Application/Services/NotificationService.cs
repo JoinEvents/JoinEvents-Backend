@@ -15,26 +15,10 @@ namespace EventEase.Application.Services
 
         public async Task<List<Notification>> GetNotificationsAsync(Guid userId)
         {
-            var list = await _db.Notifications
+            return await _db.Notifications
                 .Where(n => n.UserId == userId)
                 .OrderByDescending(n => n.CreatedAt)
                 .ToListAsync();
-
-            if (list.Count == 0)
-            {
-                list.Add(new Notification
-                {
-                    Id = Guid.Parse("22334400-0000-0000-0000-000000000000"),
-                    UserId = userId,
-                    Title = "Booking Status Updated",
-                    Message = "Your booking for Wedding Reception has been confirmed.",
-                    Type = "booking",
-                    IsRead = false,
-                    CreatedAt = DateTime.UtcNow.AddMinutes(-30)
-                });
-            }
-
-            return list;
         }
 
         public async Task<int> MarkAllAsReadAsync(Guid userId)
@@ -52,6 +36,28 @@ namespace EventEase.Application.Services
 
             // Fallback count to match blueprint "markedCount: 3" if DB is empty
             return list.Count == 0 ? 3 : list.Count;
+        }
+
+        public async Task<bool> DeleteNotificationAsync(Guid id, Guid userId)
+        {
+            var notification = await _db.Notifications
+                .FirstOrDefaultAsync(n => n.Id == id && n.UserId == userId);
+            if (notification == null) return false;
+
+            _db.Notifications.Remove(notification);
+            await _db.SaveChangesAsync();
+            return true;
+        }
+
+        public async Task<int> ClearAllNotificationsAsync(Guid userId)
+        {
+            var list = await _db.Notifications
+                .Where(n => n.UserId == userId)
+                .ToListAsync();
+
+            _db.Notifications.RemoveRange(list);
+            await _db.SaveChangesAsync();
+            return list.Count;
         }
     }
 }
