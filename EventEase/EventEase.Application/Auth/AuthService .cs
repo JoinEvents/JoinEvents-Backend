@@ -57,6 +57,29 @@ namespace EventEase.Application.Auth
                 throw new InvalidOperationException("User with this email already exists");
             }
 
+            // Generate unique referral code
+            string generatedCode = Guid.NewGuid().ToString("N").Substring(0, 8).ToUpper();
+            
+            Guid? referrerId = null;
+            User? referrer = null;
+            if (!string.IsNullOrEmpty(dto.referralCode))
+            {
+                var cleanCode = dto.referralCode.Trim().ToUpper();
+                referrer = await _db.Users.FirstOrDefaultAsync(u => u.ReferralCode == cleanCode);
+                if (referrer == null && cleanCode.Length == 8)
+                {
+                    referrer = await _db.Users.FirstOrDefaultAsync(u => u.Id.ToString().StartsWith(cleanCode.ToLower()) || u.Id.ToString().StartsWith(cleanCode.ToUpper()));
+                    if (referrer != null && string.IsNullOrEmpty(referrer.ReferralCode))
+                    {
+                        referrer.ReferralCode = cleanCode;
+                    }
+                }
+                if (referrer != null)
+                {
+                    referrerId = referrer.Id;
+                }
+            }
+
             user = new User
             {
                 Id = Guid.NewGuid(),
@@ -65,9 +88,20 @@ namespace EventEase.Application.Auth
                 Phone = dto.phone,
                 Role = dto.role ?? "Customer",
                 PasswordHash = HashPassword(dto.password),
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTime.UtcNow,
+                ReferralCode = generatedCode,
+                ReferredById = referrerId
             };
             
+            if (referrer != null)
+            {
+                user.LoyaltyPoints += 500;
+                referrer.LoyaltyPoints += 500;
+                
+                _db.Set<LoyaltyTransaction>().Add(new LoyaltyTransaction { UserId = user.Id, Points = 500, Type = "earned", Description = "Sign-up via Referral", Date = DateTime.UtcNow });
+                _db.Set<LoyaltyTransaction>().Add(new LoyaltyTransaction { UserId = referrer.Id, Points = 500, Type = "earned", Description = "Referral Bonus", Date = DateTime.UtcNow });
+            }
+
             _db.Users.Add(user);
             await _db.SaveChangesAsync();
 
@@ -109,6 +143,13 @@ namespace EventEase.Application.Auth
         {
             var user = await _db.Users.FindAsync(userId);
             if (user is null) return null;
+
+            if (string.IsNullOrEmpty(user.ReferralCode))
+            {
+                user.ReferralCode = user.Id.ToString("N").Substring(0, 8).ToUpper();
+                await _db.SaveChangesAsync();
+            }
+
             return new UserProfileDto(
                 user.Id,
                 user.Name,
@@ -120,7 +161,8 @@ namespace EventEase.Application.Auth
                 user.CreatedAt.ToString("yyyy-MM-dd"),
                 "active",
                 user.LoyaltyPoints,
-                user.LoyaltyTier ?? "Gold Member"
+                user.LoyaltyTier ?? "Gold Member",
+                user.ReferralCode
             );
         }
 

@@ -7,6 +7,7 @@ using EventEase.Application.Payments;
 using EventEase.Application.Pricing;
 using EventEase.Application.Services;
 using EventEase.Application.Vendors;
+using EventEase.Application.Loyalty;
 using EventEase.Infrastructure;
 using EventEase.Infrastructure.Data;
 using EventEase.Infrastructure.Otp;
@@ -131,6 +132,7 @@ builder.Services.AddScoped<IVendorDocumentService, VendorDocumentService>();
 builder.Services.AddScoped<EventEase.Application.Chat.IMessengerService, EventEase.Application.Chat.MessengerService>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<EventEase.Application.Categories.IEventCategoryService, EventEase.Application.Categories.EventCategoryService>();
+builder.Services.AddScoped<ILoyaltyService, LoyaltyService>();
 builder.Services.AddSingleton<IBlobService, GcpBucketService>();
 builder.Services.AddSignalR();
 //builder.Services.AddStackExchangeRedisCache(options =>

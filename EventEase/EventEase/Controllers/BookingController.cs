@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using static EventEase.Application.Checkout.Dtos;
+using EventEase.Application.Loyalty;
 
 namespace EventEase.Api.Controllers
 {
@@ -14,7 +15,14 @@ namespace EventEase.Api.Controllers
     {
         private readonly EventEaseDbContext _db;
         private readonly IPaymentGateway _gateway;
-        public BookingController(EventEaseDbContext db, IPaymentGateway gateway) { _db = db; _gateway = gateway; }
+        private readonly ILoyaltyService _loyaltyService;
+
+        public BookingController(EventEaseDbContext db, IPaymentGateway gateway, ILoyaltyService loyaltyService)
+        {
+            _db = db;
+            _gateway = gateway;
+            _loyaltyService = loyaltyService;
+        }
 
         [Authorize(Policy = "User")]
         [HttpPost]
@@ -27,7 +35,128 @@ namespace EventEase.Api.Controllers
             return Ok(dto);
         }
 
-        [Authorize(Policy = "User")]
+        private async Task<object> MapBookingToDto(Booking b)
+        {
+            var user = await _db.Users.FindAsync(b.UserId);
+            var customerName = user?.Name ?? "Customer";
+            var customerPhone = user?.Phone ?? "";
+            
+            var vendor = await _db.Vendors.FindAsync(b.VendorId);
+            var vendorName = vendor?.BusinessName ?? "Vendor Partner";
+
+            string mappedStatus = b.Status.ToLower();
+            if (mappedStatus == "paid") mappedStatus = "confirmed";
+
+            var services = new List<object>
+            {
+                new
+                {
+                    serviceId = Guid.NewGuid().ToString(),
+                    serviceName = b.PackageName ?? "Full Event Package Service",
+                    category = "Event",
+                    vendorId = b.VendorId.ToString(),
+                    vendorName = vendorName,
+                    price = b.Amount,
+                    status = "confirmed"
+                }
+            };
+
+            var package = b.PackageId.HasValue 
+                ? await _db.Packages.AsNoTracking().FirstOrDefaultAsync(p => p.Id == b.PackageId.Value) 
+                : null;
+
+            if (package != null && package.Includes != null)
+            {
+                foreach (var include in package.Includes)
+                {
+                    services.Add(new
+                    {
+                        serviceId = Guid.NewGuid().ToString(),
+                        serviceName = include,
+                        category = "Included Service",
+                        vendorId = b.VendorId.ToString(),
+                        vendorName = vendorName,
+                        price = 0m,
+                        status = "included"
+                    });
+                }
+            }
+
+            // Fetch review
+            var review = await _db.Reviews.FirstOrDefaultAsync(r => r.BookingId == b.Id && r.Status != "removed");
+            object? reviewInfo = null;
+            if (review != null)
+            {
+                reviewInfo = new
+                {
+                    rating = review.Rating,
+                    comment = review.Comment
+                };
+            }
+
+            // Fetch dispute info
+            object? disputeInfo = null;
+            if (mappedStatus == "disputed")
+            {
+                var disputeLog = await _db.BookingLogs
+                    .Where(l => l.BookingId == b.Id && l.Message.StartsWith("Dispute raised. Reason:"))
+                    .OrderByDescending(l => l.CreatedAt)
+                    .FirstOrDefaultAsync();
+
+                var reason = disputeLog != null 
+                    ? disputeLog.Message.Substring("Dispute raised. Reason:".Length).Trim()
+                    : "Dispute raised.";
+
+                disputeInfo = new
+                {
+                    reason = reason,
+                    status = "open"
+                };
+            }
+
+            // Map eventTypeId
+            string eventTypeId = "wedding";
+            var nameLower = (b.EventName ?? "").ToLower();
+            if (nameLower.Contains("birthday")) eventTypeId = "birthday";
+            else if (nameLower.Contains("corporate")) eventTypeId = "corporate";
+            else if (nameLower.Contains("beauty")) eventTypeId = "beauty";
+            else if (nameLower.Contains("travel")) eventTypeId = "travel";
+            else if (nameLower.Contains("shopping")) eventTypeId = "shopping";
+
+            return new
+            {
+                id = b.Id.ToString(),
+                bookingNumber = $"BK-{b.Id.ToString().Substring(0, 8).ToUpper()}",
+                customerId = b.UserId.ToString(),
+                customerName = customerName,
+                customerPhone = customerPhone,
+                eventTypeId = eventTypeId,
+                eventName = string.IsNullOrWhiteSpace(b.EventName) ? "Event Celebration" : b.EventName,
+                packageId = b.PackageId?.ToString() ?? Guid.NewGuid().ToString(),
+                packageName = string.IsNullOrWhiteSpace(b.PackageName) ? "Premium Celebration Package" : b.PackageName,
+                eventDate = b.EventDate.ToString("yyyy-MM-dd"),
+                venue = string.IsNullOrWhiteSpace(b.Venue) ? "Grand Palace Resort" : b.Venue,
+                city = string.IsNullOrWhiteSpace(b.City) ? (user?.City ?? "Mumbai") : b.City,
+                guestCount = b.GuestCount > 0 ? b.GuestCount : 150,
+                status = mappedStatus,
+                advanceAmount = b.AdvanceAmount,
+                baseAmount = Math.Round((b.TotalAmount - b.DamageCharges) / 1.18m, 2),
+                extraServicesAmount = b.ExtraServicesAmount,
+                damageCharges = b.DamageCharges,
+                damageChargeNotes = b.DamageChargeNotes,
+                isDamageChargeApproved = b.IsDamageChargeApproved,
+                gstPercent = 18,
+                totalAmount = b.TotalAmount,
+                finalPaidAmount = b.FinalPaidAmount,
+                cancelledBy = b.CancelledBy,
+                cancellationReason = b.CancellationReason,
+                disputeInfo = disputeInfo,
+                review = reviewInfo,
+                services = services,
+                createdAt = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm")
+            };
+        }
+
         [HttpGet("/api/v1/bookings")]
         public async Task<IActionResult> GetBookings([FromQuery] string? userId)
         {
@@ -54,61 +183,7 @@ namespace EventEase.Api.Controllers
             var result = new List<object>();
             foreach (var b in bookings)
             {
-                var user = await _db.Users.FindAsync(b.UserId);
-                var customerName = user?.Name ?? "Customer";
-                var customerPhone = user?.Phone ?? "";
-                var city = user?.City ?? "Mumbai";
-
-                var vendor = await _db.Vendors.FindAsync(b.VendorId);
-                var vendorName = vendor?.BusinessName ?? "Vendor Partner";
-
-                string mappedStatus = b.Status.ToLower();
-                if (mappedStatus == "paid") mappedStatus = "confirmed";
-
-                var services = new List<object>
-                {
-                    new
-                    {
-                        serviceId = Guid.NewGuid().ToString(),
-                        serviceName = "Full Event Package Service",
-                        category = "Wedding",
-                        vendorId = b.VendorId.ToString(),
-                        vendorName = vendorName,
-                        price = b.Amount,
-                        status = "confirmed"
-                    }
-                };
-
-                result.Add(new
-                {
-                    id = b.Id.ToString(),
-                    bookingNumber = $"BK-{b.Id.ToString().Substring(0, 8).ToUpper()}",
-                    customerId = b.UserId.ToString(),
-                    customerName = customerName,
-                    customerPhone = customerPhone,
-                    eventTypeId = "wedding",
-                    eventName = "Wedding Celebration",
-                    packageId = Guid.NewGuid().ToString(),
-                    packageName = "Premium Celebration Package",
-                    eventDate = b.EventDate.ToString("yyyy-MM-dd"),
-                    venue = "Grand Palace Resort",
-                    city = city,
-                    guestCount = 150,
-                    status = mappedStatus,
-                    advanceAmount = b.AdvanceAmount,
-                    baseAmount = Math.Round((b.TotalAmount - b.DamageCharges) / 1.18m, 2),
-                    extraServicesAmount = b.ExtraServicesAmount,
-                    damageCharges = b.DamageCharges,
-                    damageChargeNotes = b.DamageChargeNotes,
-                    isDamageChargeApproved = b.IsDamageChargeApproved,
-                    gstPercent = 18,
-                    totalAmount = b.TotalAmount,
-                    finalPaidAmount = b.FinalPaidAmount,
-                    cancelledBy = b.CancelledBy,
-                    cancellationReason = b.CancellationReason,
-                    services = services,
-                    createdAt = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm")
-                });
+                result.Add(await MapBookingToDto(b));
             }
 
             return Ok(result);
@@ -132,6 +207,7 @@ namespace EventEase.Api.Controllers
         public record CancelBookingRequest(string Reason, string CancelledBy);
         public record AddDamageRequest(decimal Amount, string Notes);
         public record RescheduleBookingRequest(DateTime NewDate);
+        public record RaiseDisputeRequest(string Reason);
 
         [Authorize(Policy = "Vendor")]
         [HttpGet("/api/v1/bookings/vendor")]
@@ -151,58 +227,7 @@ namespace EventEase.Api.Controllers
             var result = new List<object>();
             foreach (var b in bookings)
             {
-                var user = await _db.Users.FindAsync(b.UserId);
-                var customerName = user?.Name ?? "Customer";
-                var customerPhone = user?.Phone ?? "";
-                var city = user?.City ?? "Mumbai";
-
-                string mappedStatus = b.Status.ToLower();
-                if (mappedStatus == "paid") mappedStatus = "confirmed";
-
-                var services = new List<object>
-                {
-                    new
-                    {
-                        serviceId = Guid.NewGuid().ToString(),
-                        serviceName = "Full Event Package Service",
-                        category = "Wedding",
-                        vendorId = b.VendorId.ToString(),
-                        vendorName = vendor.BusinessName,
-                        price = b.Amount,
-                        status = "confirmed"
-                    }
-                };
-
-                result.Add(new
-                {
-                    id = b.Id.ToString(),
-                    bookingNumber = $"BK-{b.Id.ToString().Substring(0, 8).ToUpper()}",
-                    customerId = b.UserId.ToString(),
-                    customerName = customerName,
-                    customerPhone = customerPhone,
-                    eventTypeId = "wedding",
-                    eventName = "Wedding Celebration",
-                    packageId = Guid.NewGuid().ToString(),
-                    packageName = "Premium Celebration Package",
-                    eventDate = b.EventDate.ToString("yyyy-MM-dd"),
-                    venue = "Grand Palace Resort",
-                    city = city,
-                    guestCount = 150,
-                    status = mappedStatus,
-                    advanceAmount = b.AdvanceAmount,
-                    baseAmount = Math.Round((b.TotalAmount - b.DamageCharges) / 1.18m, 2),
-                    extraServicesAmount = b.ExtraServicesAmount,
-                    damageCharges = b.DamageCharges,
-                    damageChargeNotes = b.DamageChargeNotes,
-                    isDamageChargeApproved = b.IsDamageChargeApproved,
-                    gstPercent = 18,
-                    totalAmount = b.TotalAmount,
-                    finalPaidAmount = b.FinalPaidAmount,
-                    cancelledBy = b.CancelledBy,
-                    cancellationReason = b.CancellationReason,
-                    services = services,
-                    createdAt = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm")
-                });
+                result.Add(await MapBookingToDto(b));
             }
 
             return Ok(result);
@@ -298,6 +323,14 @@ namespace EventEase.Api.Controllers
                     Actor = "System",
                     CreatedAt = DateTime.UtcNow
                 });
+
+                // Award points: 20 points for every ₹100 spent (aligned with the 1 point = ₹5 rule)
+                int pointsEarned = (int)(booking.Amount / 100) * 20;
+                if (pointsEarned > 0)
+                {
+                    string description = $"Earned points for Booking BK-{booking.Id.ToString().Substring(0, 8).ToUpper()}";
+                    await _loyaltyService.AddPointsAsync(booking.UserId, pointsEarned, description, booking.Id);
+                }
             }
             await _db.SaveChangesAsync();
             return Ok(new { status = payment.Status });
@@ -378,6 +411,28 @@ namespace EventEase.Api.Controllers
                 CreatedAt = DateTime.UtcNow
             });
             
+            await _db.SaveChangesAsync();
+            return Ok(new { success = true });
+        }
+
+        [Authorize]
+        [HttpPost("/api/v1/bookings/{bookingId:guid}/dispute")]
+        public async Task<IActionResult> RaiseDispute(Guid bookingId, [FromBody] RaiseDisputeRequest req)
+        {
+            var booking = await _db.Bookings.FindAsync(bookingId);
+            if (booking is null) return NotFound();
+
+            booking.Status = "Disputed";
+            
+            _db.BookingLogs.Add(new BookingLog
+            {
+                Id = Guid.NewGuid(),
+                BookingId = bookingId,
+                Message = $"Dispute raised. Reason: {req.Reason}",
+                Actor = GetUserRole() ?? "Customer",
+                CreatedAt = DateTime.UtcNow
+            });
+
             await _db.SaveChangesAsync();
             return Ok(new { success = true });
         }

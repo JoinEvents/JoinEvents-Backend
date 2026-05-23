@@ -19,6 +19,7 @@ namespace EventEase.Infrastructure.Data
         public DbSet<Package> Packages { get; set; }
         public DbSet<PackageImage> PackageImages { get; set; }
         public DbSet<Booking> Bookings { get; set; }
+        public DbSet<Review> Reviews { get; set; }
         public DbSet<Payment> Payments { get; set; }
         public DbSet<Chat> Chats { get; set; }
         public DbSet<RefreshToken> RefreshTokens { get; set; }
@@ -30,6 +31,7 @@ namespace EventEase.Infrastructure.Data
         public DbSet<ChatMessage> ChatMessages { get; set; }
         public DbSet<Notification> Notifications { get; set; }
         public DbSet<EventEase.Core.Entities.EventCategory> EventCategories { get; set; }
+        public DbSet<LoyaltyTransaction> LoyaltyTransactions { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

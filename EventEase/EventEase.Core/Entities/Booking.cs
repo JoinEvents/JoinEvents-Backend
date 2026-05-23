@@ -24,5 +24,11 @@ namespace EventEase.Core.Entities
         public decimal? FinalPaidAmount { get; set; }
         public string? CancelledBy { get; set; }
         public string? CancellationReason { get; set; }
+        public Guid? PackageId { get; set; }
+        public string? PackageName { get; set; }
+        public string EventName { get; set; } = "Event Celebration";
+        public string Venue { get; set; } = "Hotel Banquet";
+        public string City { get; set; } = "Mumbai";
+        public int GuestCount { get; set; } = 100;
     }
 }

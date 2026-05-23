@@ -20,5 +20,9 @@ namespace EventEase.Core.Entities
         public string? Bio { get; set; }
         public int LoyaltyPoints { get; set; } = 0;
         public string? LoyaltyTier { get; set; }
+        
+        // Referral System
+        public string? ReferralCode { get; set; }
+        public Guid? ReferredById { get; set; }
     }
 }
