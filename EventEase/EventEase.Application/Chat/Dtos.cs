@@ -4,8 +4,8 @@ namespace EventEase.Application.Chat
 {
     public class Dtos
     {
-        public record ThreadPreviewResponse(string ThreadId, string RecipientId, string RecipientName, string LastMessage, int UnreadCount, DateTime UpdatedAt, string Status);
+        public record ThreadPreviewResponse(string ThreadId, string RecipientId, string RecipientName, string? RecipientAvatar, string LastMessage, int UnreadCount, DateTime UpdatedAt, string Status, string? EventTitle = null);
         public record SendMessageRequest(string Content);
-        public record MessageResponse(string MessageId, string ThreadId, string SenderId, string Content, DateTime Timestamp);
+        public record MessageResponse(string MessageId, string ThreadId, string SenderId, string SenderName, string? SenderAvatar, string Content, DateTime Timestamp);
     }
 }

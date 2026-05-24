@@ -297,8 +297,27 @@ namespace EventEase.Api.Controllers
         {
             var booking = await _db.Bookings.FindAsync(req.BookingId);
             if (booking is null) return NotFound();
-            var (refId, _) = await _gateway.InitiateAsync(booking.Id, booking.Amount, req.PaymentMethod);
-            var payment = new Payment { Id = Guid.NewGuid(), BookingId = booking.Id, Amount = booking.Amount, ProviderReference = refId };
+
+            // Security: Enforce user ownership of the booking
+            var currentUserId = GetUserId();
+            if (booking.UserId != currentUserId)
+            {
+                return StatusCode(403, new { error = "You do not have permission to pay for this booking." });
+            }
+
+            decimal amountToPay = booking.Amount;
+            if (!booking.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase))
+            {
+                amountToPay = booking.TotalAmount - booking.AdvanceAmount;
+            }
+
+            if (amountToPay <= 0)
+            {
+                return BadRequest(new { error = "This booking is already fully paid." });
+            }
+
+            var (refId, _) = await _gateway.InitiateAsync(booking.Id, amountToPay, req.PaymentMethod);
+            var payment = new Payment { Id = Guid.NewGuid(), BookingId = booking.Id, Amount = amountToPay, ProviderReference = refId };
             _db.Payments.Add(payment);
             await _db.SaveChangesAsync();
             return Ok(new { paymentId = payment.Id, providerRef = refId });
@@ -310,22 +329,42 @@ namespace EventEase.Api.Controllers
         {
             var payment = await _db.Payments.FirstOrDefaultAsync(p => p.ProviderReference == req.ProviderRef);
             if (payment is null) return NotFound();
+            
             var ok = await _gateway.ConfirmAsync(req.ProviderRef, req.Status);
             payment.Status = ok ? "Succeeded" : "Failed";
+            
             var booking = await _db.Bookings.FindAsync(payment.BookingId);
             if (booking is not null && ok) {
-                booking.Status = "Paid";
-                _db.BookingLogs.Add(new BookingLog
+                // If the booking was already confirmed/completed/etc, it means we are paying the final balance.
+                // In that case, set status to Settled and record the FinalPaidAmount.
+                if (!booking.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase))
                 {
-                    Id = Guid.NewGuid(),
-                    BookingId = booking.Id,
-                    Message = "Booking confirmed via successful payment confirmation.",
-                    Actor = "System",
-                    CreatedAt = DateTime.UtcNow
-                });
+                    booking.Status = "Settled";
+                    booking.FinalPaidAmount = booking.TotalAmount;
+                    _db.BookingLogs.Add(new BookingLog
+                    {
+                        Id = Guid.NewGuid(),
+                        BookingId = booking.Id,
+                        Message = "Booking fully settled via successful balance payment confirmation.",
+                        Actor = "System",
+                        CreatedAt = DateTime.UtcNow
+                    });
+                }
+                else
+                {
+                    booking.Status = "Paid";
+                    _db.BookingLogs.Add(new BookingLog
+                    {
+                        Id = Guid.NewGuid(),
+                        BookingId = booking.Id,
+                        Message = "Booking confirmed via successful payment confirmation.",
+                        Actor = "System",
+                        CreatedAt = DateTime.UtcNow
+                    });
+                }
 
-                // Award points: 10 points for every ₹100 spent
-                int pointsEarned = (int)(booking.Amount / 100) * 10;
+                // Award points: 10 points for every ₹100 spent in this specific payment transaction
+                int pointsEarned = (int)(payment.Amount / 100) * 10;
                 if (pointsEarned > 0)
                 {
                     string description = $"Earned points for Booking BK-{booking.Id.ToString().Substring(0, 8).ToUpper()}";

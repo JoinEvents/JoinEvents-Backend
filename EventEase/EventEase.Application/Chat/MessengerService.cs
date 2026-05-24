@@ -20,38 +20,69 @@ namespace EventEase.Application.Chat
                 .Where(t => t.CustomerId == userId || t.VendorId == userId)
                 .ToListAsync();
 
-            var results = new List<ThreadPreviewResponse>();
-            foreach (var t in threads)
+            if (threads.Count == 0) return new List<ThreadPreviewResponse>();
+
+            var recipientIds = threads.Select(t => t.CustomerId == userId ? t.VendorId : t.CustomerId).Distinct().ToList();
+            var recipients = await _db.Users.Where(u => recipientIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id, u => u);
+
+            var rfpIds = threads.Where(t => t.RfpId.HasValue).Select(t => t.RfpId!.Value).Distinct().ToList();
+            var rfps = await _db.Rfps.Where(r => rfpIds.Contains(r.Id)).ToDictionaryAsync(r => r.Id, r => r);
+
+            var customerIds = threads.Select(t => t.CustomerId).ToList();
+            var vendorIds = threads.Select(t => t.VendorId).ToList();
+            var bookings = await _db.Bookings
+                .Where(b => customerIds.Contains(b.UserId) && vendorIds.Contains(b.VendorId))
+                .OrderByDescending(b => b.EventDate)
+                .ToListAsync();
+
+            var threadIds = threads.Select(t => t.Id).ToList();
+            var lastMessages = await _db.ChatMessages
+                .Where(m => threadIds.Contains(m.ThreadId))
+                .GroupBy(m => m.ThreadId)
+                .Select(g => new { ThreadId = g.Key, Message = g.OrderByDescending(m => m.Timestamp).FirstOrDefault() })
+                .ToListAsync();
+
+            var lastMsgDict = lastMessages
+                .Where(x => x.Message != null)
+                .ToDictionary(x => x.ThreadId, x => x.Message);
+
+            return threads.Select(t =>
             {
                 var isCustomer = t.CustomerId == userId;
                 var recipientId = isCustomer ? t.VendorId : t.CustomerId;
+                var recipient = recipients.GetValueOrDefault(recipientId);
+                var lastMsg = lastMsgDict.GetValueOrDefault(t.Id);
+                var displayUnreadCount = lastMsg != null && lastMsg.SenderId != userId ? t.UnreadCount : 0;
 
-                var recipient = await _db.Users.FindAsync(recipientId);
-                var recipientName = recipient?.Name ?? "Unknown";
-
-                var lastMsg = await _db.ChatMessages
-                    .Where(m => m.ThreadId == t.Id)
-                    .OrderByDescending(m => m.Timestamp)
-                    .FirstOrDefaultAsync();
-
-                var displayUnreadCount = 0;
-                if (lastMsg != null && lastMsg.SenderId != userId)
+                string? eventTitle = null;
+                if (t.RfpId.HasValue && rfps.TryGetValue(t.RfpId.Value, out var rfp))
                 {
-                    displayUnreadCount = t.UnreadCount;
+                    eventTitle = rfp.Title;
                 }
 
-                results.Add(new ThreadPreviewResponse(
+                if (string.IsNullOrEmpty(eventTitle))
+                {
+                    var booking = bookings.FirstOrDefault(b => b.UserId == t.CustomerId && b.VendorId == t.VendorId);
+                    if (booking != null)
+                    {
+                        eventTitle = !string.IsNullOrEmpty(booking.EventName)
+                            ? booking.EventName
+                            : (!string.IsNullOrEmpty(booking.PackageName) ? booking.PackageName : "Event Booking");
+                    }
+                }
+
+                return new ThreadPreviewResponse(
                     t.Id.ToString(),
                     recipientId.ToString(),
-                    recipientName,
-                    t.LastMessage ?? "We have sent the menu draft for approval...",
+                    recipient?.Name ?? "Unknown",
+                    recipient?.Avatar,
+                    t.LastMessage ?? "",
                     displayUnreadCount,
-                    t.UpdatedAt,
-                    t.Status
-                ));
-            }
-
-            return results;
+                    DateTime.SpecifyKind(t.UpdatedAt, DateTimeKind.Utc),
+                    t.Status,
+                    eventTitle
+                );
+            }).ToList();
         }
 
         public async Task<MessageResponse?> SendMessageAsync(Guid threadId, Guid senderId, SendMessageRequest dto)
@@ -59,31 +90,40 @@ namespace EventEase.Application.Chat
             var thread = await _db.ChatThreads.FindAsync(threadId);
             if (thread is null) return null;
 
-            if (thread.Status != "Accepted" && thread.Status != "Active")
+            if (thread.Status == "Rejected" || thread.Status == "Closed")
             {
-                // In some cases we might allow the requester to send more messages while pending, 
-                // but let's stick to the "If accepted... continued" rule.
-                return null; 
+                return null;
             }
 
-            if (!await IsChatSessionAliveAsync(threadId))
+            if (thread.RfpId.HasValue)
             {
-                return null; // Session is closed
+                var isBookingComplete = await _db.Bookings
+                    .AnyAsync(b => b.RfpId == thread.RfpId && (b.Status == "Paid" || b.Status == "Completed"));
+                if (isBookingComplete)
+                {
+                    thread.Status = "Closed";
+                    thread.UpdatedAt = DateTime.UtcNow;
+                    await _db.SaveChangesAsync();
+                    return null;
+                }
             }
 
+            var now = DateTime.UtcNow;
             var msg = new Core.Entities.ChatMessage
             {
                 Id = Guid.NewGuid(),
                 ThreadId = threadId,
                 SenderId = senderId,
                 Content = dto.Content,
-                Timestamp = DateTime.UtcNow
+                Timestamp = now
             };
             _db.ChatMessages.Add(msg);
 
             thread.LastMessage = dto.Content;
-            thread.UpdatedAt = DateTime.UtcNow;
+            thread.UpdatedAt = now;
             thread.UnreadCount += 1;
+
+            var sender = await _db.Users.FindAsync(senderId);
 
             await _db.SaveChangesAsync();
 
@@ -91,8 +131,10 @@ namespace EventEase.Application.Chat
                 msg.Id.ToString(),
                 thread.Id.ToString(),
                 senderId.ToString(),
+                sender?.Name ?? "Unknown",
+                sender?.Avatar,
                 msg.Content,
-                msg.Timestamp
+                now
             );
         }
 
@@ -101,28 +143,14 @@ namespace EventEase.Application.Chat
             var thread = await _db.ChatThreads.FindAsync(threadId);
             if (thread == null) return false;
 
-            // Chat is only alive if it's Accepted or Active
             if (thread.Status == "Rejected" || thread.Status == "Closed") return false;
-            
-            // If it's still Pending, it's "alive" in the sense that they are waiting for acceptance
-            // but the user said "If accepted the chat session going to be continued"
-            // and "until whether it is accepted or rejected".
-            // This implies messaging might be limited until accepted.
-            // But let's assume "alive" means "not closed/rejected" for now.
 
             if (!thread.RfpId.HasValue) return thread.Status != "Rejected" && thread.Status != "Closed";
 
             var isBookingComplete = await _db.Bookings
                 .AnyAsync(b => b.RfpId == thread.RfpId && (b.Status == "Paid" || b.Status == "Completed"));
 
-            if (isBookingComplete && thread.Status != "Closed")
-            {
-                thread.Status = "Closed";
-                await _db.SaveChangesAsync();
-                return false;
-            }
-
-            return thread.Status == "Accepted" || thread.Status == "Active" || thread.Status == "Pending";
+            return !isBookingComplete && (thread.Status == "Accepted" || thread.Status == "Active" || thread.Status == "Pending");
         }
 
         public async Task<List<MessageResponse>> GetMessagesAsync(Guid threadId)
@@ -132,17 +160,27 @@ namespace EventEase.Application.Chat
                 .OrderBy(m => m.Timestamp)
                 .ToListAsync();
 
-            return messages.Select(m => new MessageResponse(
-                m.Id.ToString(),
-                m.ThreadId.ToString(),
-                m.SenderId.ToString(),
-                m.Content,
-                m.Timestamp
-            )).ToList();
+            var senderIds = messages.Select(m => m.SenderId).Distinct().ToList();
+            var senders = await _db.Users.Where(u => senderIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id, u => u);
+
+            return messages.Select(m =>
+            {
+                var sender = senders.GetValueOrDefault(m.SenderId);
+                return new MessageResponse(
+                    m.Id.ToString(),
+                    m.ThreadId.ToString(),
+                    m.SenderId.ToString(),
+                    sender?.Name ?? "Unknown",
+                    sender?.Avatar,
+                    m.Content,
+                    DateTime.SpecifyKind(m.Timestamp, DateTimeKind.Utc)
+                );
+            }).ToList();
         }
 
         public async Task<Guid> RequestChatAsync(Guid customerId, Guid vendorId, Guid? rfpId, string? initialMessage)
         {
+            var now = DateTime.UtcNow;
             var thread = await _db.ChatThreads.FirstOrDefaultAsync(t => 
                 t.CustomerId == customerId && t.VendorId == vendorId && t.RfpId == rfpId);
 
@@ -156,7 +194,7 @@ namespace EventEase.Application.Chat
                     RfpId = rfpId,
                     Status = "Pending",
                     LastMessage = initialMessage,
-                    UpdatedAt = DateTime.UtcNow,
+                    UpdatedAt = now,
                     UnreadCount = string.IsNullOrEmpty(initialMessage) ? 0 : 1
                 };
                 _db.ChatThreads.Add(thread);
@@ -166,6 +204,7 @@ namespace EventEase.Application.Chat
                 if (!string.IsNullOrEmpty(initialMessage))
                 {
                     thread.UnreadCount += 1;
+                    thread.UpdatedAt = now;
                 }
             }
 
@@ -177,11 +216,11 @@ namespace EventEase.Application.Chat
                     ThreadId = thread.Id,
                     SenderId = customerId,
                     Content = initialMessage,
-                    Timestamp = DateTime.UtcNow
+                    Timestamp = now
                 };
                 _db.ChatMessages.Add(msg);
                 thread.LastMessage = initialMessage;
-                thread.UpdatedAt = DateTime.UtcNow;
+                thread.UpdatedAt = now;
             }
 
             await _db.SaveChangesAsync();

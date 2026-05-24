@@ -16,6 +16,8 @@ using Microsoft.Extensions.Caching.StackExchangeRedis;
 using Microsoft.IdentityModel.Tokens;
 using StackExchange.Redis;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -145,6 +147,7 @@ builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
         options.JsonSerializerOptions.PropertyNamingPolicy = null;
+        options.JsonSerializerOptions.Converters.Add(new UtcDateTimeConverter());
     });
 
 

@@ -3,9 +3,11 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.SignalR;
 using EventEase.Application.Services;
 using EventEase.Application.Vendors;
 using EventEase.Application.Chat;
+using EventEase.Api.Hubs;
 using static EventEase.Application.Services.Dtos;
 using static EventEase.Application.Vendors.Dtos;
 using static EventEase.Application.Chat.Dtos;
@@ -19,17 +21,20 @@ namespace EventEase.Api.Controllers
         private readonly IVendorDocumentService _documents;
         private readonly IMessengerService _messenger;
         private readonly INotificationService _notifications;
+        private readonly IHubContext<ChatHub> _hubContext;
 
         public EnterprisePortalsController(
             IPortalsService portals,
             IVendorDocumentService documents,
             IMessengerService messenger,
-            INotificationService notifications)
+            INotificationService notifications,
+            IHubContext<ChatHub> hubContext)
         {
             _portals = portals;
             _documents = documents;
             _messenger = messenger;
             _notifications = notifications;
+            _hubContext = hubContext;
         }
 
         // --- CUSTOMER PORTAL SERVICES ---
@@ -256,16 +261,12 @@ namespace EventEase.Api.Controllers
         public async Task<IActionResult> SendMessage(Guid threadId, [FromBody] SendMessageRequest dto)
         {
             var userId = GetUserId();
-            
-            // Check if thread is accepted before sending if sender is customer?
-            // Actually the audio said "until whether it is accepted or rejected. If accepted the chat session going to be continued"
-            // This suggests messages after the initial request might need acceptance.
-            
             var res = await _messenger.SendMessageAsync(threadId, userId, dto);
             if (res == null)
             {
                 return BadRequest(new { error = "Chat session is closed, rejected, or thread not found." });
             }
+            await _hubContext.Clients.Group(threadId.ToString()).SendAsync("ReceiveMessage", res);
             return StatusCode(201, res);
         }
 
