@@ -161,7 +161,7 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Ensure verification columns exist in Packages table
+// Ensure verification columns exist in Packages table and notification columns exist in Users table
 try
 {
     using (var scope = app.Services.CreateScope())
@@ -186,8 +186,49 @@ try
             BEGIN
                 ALTER TABLE [dbo].[Packages] ADD [VerificationComment] NVARCHAR(MAX) NULL;
             END");
+
+        // Add EmailNotifications, InAppNotifications, SmsNotifications to Users
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID(N'[dbo].[Users]') 
+                AND name = 'EmailNotifications'
+            )
+            BEGIN
+                ALTER TABLE [dbo].[Users] ADD [EmailNotifications] BIT NOT NULL DEFAULT 1;
+            END");
+
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID(N'[dbo].[Users]') 
+                AND name = 'InAppNotifications'
+            )
+            BEGIN
+                ALTER TABLE [dbo].[Users] ADD [InAppNotifications] BIT NOT NULL DEFAULT 1;
+            END");
+
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID(N'[dbo].[Users]') 
+                AND name = 'SmsNotifications'
+            )
+            BEGIN
+                ALTER TABLE [dbo].[Users] ADD [SmsNotifications] BIT NOT NULL DEFAULT 0;
+            END");
+
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID(N'[dbo].[Users]') 
+                AND name = 'Avatar'
+            )
+            BEGIN
+                ALTER TABLE [dbo].[Users] ADD [Avatar] NVARCHAR(MAX) NULL;
+            END");
             
-        Console.WriteLine("[Startup DB Schema Check] Package verification status columns verified/added successfully.");
+        Console.WriteLine("[Startup DB Schema Check] Package verification status, User notifications, and Avatar columns verified/added successfully.");
     }
 }
 catch (Exception ex)
@@ -197,6 +238,7 @@ catch (Exception ex)
 
 app.UseCors("AllowAll");
 app.UseSerilogRequestLogging();
+app.UseStaticFiles();
 
 try
 {

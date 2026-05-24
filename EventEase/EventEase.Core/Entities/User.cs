@@ -24,5 +24,13 @@ namespace EventEase.Core.Entities
         // Referral System
         public string? ReferralCode { get; set; }
         public Guid? ReferredById { get; set; }
+
+        // Notification Settings
+        public bool EmailNotifications { get; set; } = true;
+        public bool InAppNotifications { get; set; } = true;
+        public bool SmsNotifications { get; set; } = false;
+
+        // Profile Photo
+        public string? Avatar { get; set; }
     }
 }

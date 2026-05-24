@@ -178,6 +178,42 @@ namespace EventEase.Application.Auth
                 await _db.SaveChangesAsync();
             }
 
+             return new UserProfileDto(
+                user.Id,
+                user.Name,
+                user.Email,
+                user.Phone ?? string.Empty,
+                user.City ?? "Hyderabad",
+                user.Address ?? "123, Jubilee Hills, Hyderabad, Telangana",
+                user.Bio ?? "Looking for the best event planners for my family functions.",
+                user.CreatedAt.ToString("yyyy-MM-dd"),
+                "active",
+                user.LoyaltyPoints,
+                user.LoyaltyTier ?? "Gold Member",
+                user.ReferralCode,
+                user.EmailNotifications,
+                user.InAppNotifications,
+                user.SmsNotifications,
+                user.Avatar
+            );
+        }
+
+        public async Task<UserProfileDto?> UpdateProfileAsync(Guid userId, UpdateProfileDto dto)
+        {
+            var user = await _db.Users.FindAsync(userId);
+            if (user is null) return null;
+
+            if (dto.name != null) user.Name = dto.name;
+            if (dto.phone != null) user.Phone = dto.phone;
+            if (dto.city != null) user.City = dto.city;
+            if (dto.address != null) user.Address = dto.address;
+            if (dto.bio != null) user.Bio = dto.bio;
+            if (dto.emailNotifications != null) user.EmailNotifications = dto.emailNotifications.Value;
+            if (dto.inAppNotifications != null) user.InAppNotifications = dto.inAppNotifications.Value;
+            if (dto.smsNotifications != null) user.SmsNotifications = dto.smsNotifications.Value;
+
+            await _db.SaveChangesAsync();
+
             return new UserProfileDto(
                 user.Id,
                 user.Name,
@@ -190,8 +226,21 @@ namespace EventEase.Application.Auth
                 "active",
                 user.LoyaltyPoints,
                 user.LoyaltyTier ?? "Gold Member",
-                user.ReferralCode
+                user.ReferralCode,
+                user.EmailNotifications,
+                user.InAppNotifications,
+                user.SmsNotifications,
+                user.Avatar
             );
+        }
+
+        public async Task<bool> UpdateAvatarAsync(Guid userId, string avatarUrl)
+        {
+            var user = await _db.Users.FindAsync(userId);
+            if (user is null) return false;
+            user.Avatar = avatarUrl;
+            await _db.SaveChangesAsync();
+            return true;
         }
 
         public async Task<bool> UpdatePasswordAsync(Guid userId, string currentPassword, string newPassword)
@@ -200,6 +249,38 @@ namespace EventEase.Application.Auth
             if (user is null) return false;
             if (!string.IsNullOrEmpty(user.PasswordHash) && user.PasswordHash != HashPassword(currentPassword)) return false;
             user.PasswordHash = HashPassword(newPassword);
+            await _db.SaveChangesAsync();
+            return true;
+        }
+
+        public async Task<bool> DeleteAccountAsync(Guid userId)
+        {
+            var user = await _db.Users.FindAsync(userId);
+            if (user is null) return false;
+
+            // Delete Refresh Tokens
+            var refreshTokens = await _db.RefreshTokens.Where(rt => rt.UserId == userId).ToListAsync();
+            if (refreshTokens.Any()) _db.RefreshTokens.RemoveRange(refreshTokens);
+
+            // Delete Loyalty Transactions
+            var loyaltyTx = await _db.LoyaltyTransactions.Where(lt => lt.UserId == userId).ToListAsync();
+            if (loyaltyTx.Any()) _db.LoyaltyTransactions.RemoveRange(loyaltyTx);
+
+            // Delete Notifications
+            var notifications = await _db.Notifications.Where(n => n.UserId == userId).ToListAsync();
+            if (notifications.Any()) _db.Notifications.RemoveRange(notifications);
+
+            // Delete Vendor if exists
+            var vendor = await _db.Vendors.FirstOrDefaultAsync(v => v.UserId == userId);
+            if (vendor != null)
+            {
+                var services = await _db.Services.Where(s => s.VendorId == vendor.Id).ToListAsync();
+                if (services.Any()) _db.Services.RemoveRange(services);
+
+                _db.Vendors.Remove(vendor);
+            }
+
+            _db.Users.Remove(user);
             await _db.SaveChangesAsync();
             return true;
         }

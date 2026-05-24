@@ -16,5 +16,8 @@ namespace EventEase.Application.Auth
         Task<UserProfileDto?> GetProfileAsync(Guid userId);
         Task<bool> UpdatePasswordAsync(Guid userId, string currentPassword, string newPassword);
         Task<AuthTokens> RegisterWithPasswordAsync(RegisterWithPasswordDto dto);
+        Task<UserProfileDto?> UpdateProfileAsync(Guid userId, UpdateProfileDto dto);
+        Task<bool> DeleteAccountAsync(Guid userId);
+        Task<bool> UpdateAvatarAsync(Guid userId, string avatarUrl);
     }
 }
