@@ -32,6 +32,7 @@ namespace EventEase.Infrastructure.Data
         public DbSet<Notification> Notifications { get; set; }
         public DbSet<EventEase.Core.Entities.EventCategory> EventCategories { get; set; }
         public DbSet<LoyaltyTransaction> LoyaltyTransactions { get; set; }
+        public DbSet<SupportTicket> SupportTickets { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

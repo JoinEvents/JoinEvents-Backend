@@ -65,7 +65,11 @@ builder.Services.AddAuthentication("Bearer")
 
 builder.Services.AddAuthorization(options =>
 {
-    options.AddPolicy("User", p => p.RequireAssertion(context => context.User.HasClaim(c => (c.Type == System.Security.Claims.ClaimTypes.Role || c.Type == "role") && (c.Value.Equals("User", StringComparison.OrdinalIgnoreCase) || c.Value.Equals("Customer", StringComparison.OrdinalIgnoreCase) || c.Value.Equals("Admin", StringComparison.OrdinalIgnoreCase) || c.Value.Equals("Vendor", StringComparison.OrdinalIgnoreCase)))));
+    options.AddPolicy("User", p => p.RequireAssertion(context => {
+        var claims = context.User.Claims.Select(c => $"{c.Type}={c.Value}").ToList();
+        Serilog.Log.Information("[User Policy] Evaluating claims: {Claims}", string.Join(", ", claims));
+        return context.User.HasClaim(c => (c.Type == System.Security.Claims.ClaimTypes.Role || c.Type == "role") && (c.Value.Equals("User", StringComparison.OrdinalIgnoreCase) || c.Value.Equals("Customer", StringComparison.OrdinalIgnoreCase) || c.Value.Equals("Admin", StringComparison.OrdinalIgnoreCase) || c.Value.Equals("Vendor", StringComparison.OrdinalIgnoreCase) || c.Value.Equals("Support", StringComparison.OrdinalIgnoreCase)));
+    }));
     options.AddPolicy("Vendor", p => p.RequireAssertion(context => context.User.HasClaim(c => (c.Type == System.Security.Claims.ClaimTypes.Role || c.Type == "role") && (c.Value.Equals("Vendor", StringComparison.OrdinalIgnoreCase) || c.Value.Equals("Admin", StringComparison.OrdinalIgnoreCase)))));
     options.AddPolicy("Admin", p => p.RequireAssertion(context => context.User.HasClaim(c => (c.Type == System.Security.Claims.ClaimTypes.Role || c.Type == "role") && c.Value.Equals("Admin", StringComparison.OrdinalIgnoreCase))));
 });
@@ -134,6 +138,7 @@ builder.Services.AddScoped<IVendorDocumentService, VendorDocumentService>();
 builder.Services.AddScoped<EventEase.Application.Chat.IMessengerService, EventEase.Application.Chat.MessengerService>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<EventEase.Application.Categories.IEventCategoryService, EventEase.Application.Categories.EventCategoryService>();
+builder.Services.AddScoped<EventEase.Application.SupportTicket.ISupportService, EventEase.Application.SupportTicket.SupportService>();
 builder.Services.AddScoped<ILoyaltyService, LoyaltyService>();
 builder.Services.AddSingleton<IBlobService, GcpBucketService>();
 builder.Services.AddSignalR();
@@ -230,8 +235,48 @@ try
             BEGIN
                 ALTER TABLE [dbo].[Users] ADD [Avatar] NVARCHAR(MAX) NULL;
             END");
+
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID(N'[dbo].[SupportTickets]') 
+                AND name = 'AttachmentUrl'
+            )
+            BEGIN
+                ALTER TABLE [dbo].[SupportTickets] ADD [AttachmentUrl] NVARCHAR(MAX) NULL;
+            END");
+
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID(N'[dbo].[SupportTickets]') 
+                AND name = 'BookingId'
+            )
+            BEGIN
+                ALTER TABLE [dbo].[SupportTickets] ADD [BookingId] UNIQUEIDENTIFIER NULL;
+            END");
+
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID(N'[dbo].[SupportTickets]') 
+                AND name = 'Priority'
+            )
+            BEGIN
+                ALTER TABLE [dbo].[SupportTickets] ADD [Priority] NVARCHAR(50) NOT NULL DEFAULT 'Medium';
+            END");
+
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID(N'[dbo].[ChatMessages]') 
+                AND name = 'IsInternal'
+            )
+            BEGIN
+                ALTER TABLE [dbo].[ChatMessages] ADD [IsInternal] BIT NOT NULL DEFAULT 0;
+            END");
             
-        Console.WriteLine("[Startup DB Schema Check] Package verification status, User notifications, and Avatar columns verified/added successfully.");
+        Console.WriteLine("[Startup DB Schema Check] Package verification status, User notifications, Avatar, AttachmentUrl, BookingId, Priority, and IsInternal columns verified/added successfully.");
     }
 }
 catch (Exception ex)
@@ -242,6 +287,17 @@ catch (Exception ex)
 app.UseCors("AllowAll");
 app.UseSerilogRequestLogging();
 app.UseStaticFiles();
+
+var storagePath = Path.Combine(builder.Environment.ContentRootPath, "storage");
+if (!Directory.Exists(storagePath))
+{
+    Directory.CreateDirectory(storagePath);
+}
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(storagePath),
+    RequestPath = "/files"
+});
 
 try
 {

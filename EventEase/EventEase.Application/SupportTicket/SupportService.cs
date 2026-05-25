@@ -1,4 +1,5 @@
-﻿using EventEase.Infrastructure.Data;
+using EventEase.Infrastructure.Data;
+using EventEase.Core.Entities;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
@@ -14,31 +15,62 @@ namespace EventEase.Application.SupportTicket
         private readonly EventEaseDbContext _db;
         public SupportService(EventEaseDbContext db) => _db = db;
 
-        public async Task<SupportTicket> CreateAsync(Guid userId, CreateTicketDto dto)
+        public async Task<EventEase.Core.Entities.SupportTicket> CreateAsync(Guid userId, CreateTicketDto dto)
         {
-            var ticket = new SupportTicket
+            var ticket = new EventEase.Core.Entities.SupportTicket
             {
                 Id = Guid.NewGuid(),
                 UserId = userId,
                 Subject = dto.Subject,
-                Description = dto.Description
+                Description = dto.Description,
+                EventName = dto.EventName,
+                AttachmentUrl = dto.AttachmentUrl,
+                BookingId = dto.BookingId,
+                Priority = dto.Priority ?? "Medium"
             };
-            _db.Set<SupportTicket>().Add(ticket);
+            _db.Set<EventEase.Core.Entities.SupportTicket>().Add(ticket);
             await _db.SaveChangesAsync();
             return ticket;
         }
 
-        public Task<List<SupportTicket>> GetAllAsync() =>
-            _db.Set<SupportTicket>().OrderByDescending(t => t.CreatedAt).ToListAsync();
+        public Task<List<EventEase.Core.Entities.SupportTicket>> GetAllAsync() =>
+            _db.Set<EventEase.Core.Entities.SupportTicket>().OrderByDescending(t => t.CreatedAt).ToListAsync();
 
-        public async Task<SupportTicket?> UpdateStatusAsync(Guid id, string status)
+        public async Task<EventEase.Core.Entities.SupportTicket?> UpdatePropertiesAsync(Guid id, string? status, string? priority)
         {
-            var ticket = await _db.Set<SupportTicket>().FindAsync(id);
+            var ticket = await _db.Set<EventEase.Core.Entities.SupportTicket>().FindAsync(id);
             if (ticket is null) return null;
-            ticket.Status = status;
+            if (!string.IsNullOrEmpty(status)) ticket.Status = status;
+            if (!string.IsNullOrEmpty(priority)) ticket.Priority = priority;
             ticket.UpdatedAt = DateTime.UtcNow;
             await _db.SaveChangesAsync();
             return ticket;
+        }
+
+        public async Task<DashboardStatsDto> GetDashboardStatsAsync()
+        {
+            var tickets = await _db.Set<EventEase.Core.Entities.SupportTicket>().ToListAsync();
+            var openTickets = tickets.Count(t => t.Status.Equals("Open", StringComparison.OrdinalIgnoreCase) || t.Status.Equals("InProgress", StringComparison.OrdinalIgnoreCase));
+            var urgentTickets = tickets.Count(t => t.Priority.Equals("Urgent", StringComparison.OrdinalIgnoreCase));
+            var highTickets = tickets.Count(t => t.Priority.Equals("High", StringComparison.OrdinalIgnoreCase));
+            var mediumLowTickets = tickets.Count(t => t.Priority.Equals("Medium", StringComparison.OrdinalIgnoreCase) || t.Priority.Equals("Low", StringComparison.OrdinalIgnoreCase));
+            var todayResolves = tickets.Count(t => t.Status.Equals("Resolved", StringComparison.OrdinalIgnoreCase) && t.UpdatedAt?.Date == DateTime.UtcNow.Date);
+
+            // Dummy active chats and pending reviews for now
+            var activeChats = 0;
+            var pendingReviews = 0;
+
+            return new DashboardStatsDto(
+                openTickets,
+                activeChats,
+                pendingReviews,
+                todayResolves,
+                urgentTickets,
+                highTickets,
+                mediumLowTickets,
+                "4.2h",
+                "4.8"
+            );
         }
     }
 }
