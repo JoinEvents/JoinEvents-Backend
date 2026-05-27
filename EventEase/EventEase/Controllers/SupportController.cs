@@ -199,6 +199,7 @@ namespace EventEase.Api.Controllers
 
             var customer = await _db.Users.FindAsync(ticket.UserId);
             var customerName = customer?.Name ?? "Customer";
+            var customerAvatar = customer?.Avatar;
 
             object? vendorContact = null;
             Booking? booking = null;
@@ -248,6 +249,7 @@ namespace EventEase.Api.Controllers
                 Id = ticket.Id,
                 CustomerId = ticket.UserId,
                 CustomerName = customerName,
+                CustomerAvatar = customerAvatar,
                 Subject = ticket.Subject,
                 Description = ticket.Description,
                 Status = ticket.Status.ToLower(),
@@ -276,7 +278,7 @@ namespace EventEase.Api.Controllers
             var senderIds = allMessages.Select(m => m.SenderId).Distinct().ToList();
             var allUsers = await _db.Users
                 .Where(u => senderIds.Contains(u.Id) || customerIds.Contains(u.Id))
-                .ToDictionaryAsync(u => u.Id, u => new { u.Name, Role = u.Role ?? "Customer" });
+                .ToDictionaryAsync(u => u.Id, u => new { u.Name, Role = u.Role ?? "Customer", u.Avatar });
 
             var eventNames = tickets.Where(t => !string.IsNullOrEmpty(t.EventName)).Select(t => t.EventName).Distinct().ToList();
             var bookingIds = tickets.Where(t => t.BookingId.HasValue).Select(t => t.BookingId!.Value).ToList();
@@ -316,6 +318,7 @@ namespace EventEase.Api.Controllers
                     }).ToList();
 
                 var customerName = allUsers.TryGetValue(ticket.UserId, out var cust) ? cust.Name : "Customer";
+                var customerAvatar = allUsers.TryGetValue(ticket.UserId, out var custAv) ? custAv.Avatar : null;
 
                 object? vendorContact = null;
                 Booking? booking = null;
@@ -364,6 +367,7 @@ namespace EventEase.Api.Controllers
                     Id = ticket.Id,
                     CustomerId = ticket.UserId,
                     CustomerName = customerName,
+                    CustomerAvatar = customerAvatar,
                     Subject = ticket.Subject,
                     Description = ticket.Description,
                     Status = ticket.Status.ToLower(),
@@ -396,28 +400,235 @@ namespace EventEase.Api.Controllers
 
         // --- Vendors ---
         [HttpGet("vendors/pending")]
-        public IActionResult GetPendingVendors()
+        public async Task<IActionResult> GetPendingVendors()
         {
-            return Ok(new List<object>
-            {
-                new { id = Guid.NewGuid(), businessName = "Mock Vendor 1", verificationStatus = "pending" }
-            });
+            var vendors = await _db.Vendors
+                .Where(v => !v.IsValidated)
+                .ToListAsync();
+
+            var userIds = vendors.Select(v => v.UserId).ToList();
+            var users = await _db.Users.Where(u => userIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id, u => u);
+
+            var vendorIds = vendors.Select(v => v.Id).ToList();
+            var docs = await _db.VendorDocuments.Where(d => vendorIds.Contains(d.VendorId)).ToListAsync();
+
+            var response = vendors.Select(v => {
+                users.TryGetValue(v.UserId, out var u);
+                var vDocs = docs.Where(d => d.VendorId == v.Id).ToList();
+                return new {
+                    id = v.Id,
+                    name = u?.Name ?? "Unknown",
+                    businessName = v.BusinessName,
+                    email = u?.Email ?? "Unknown",
+                    phone = u?.Phone ?? "Unknown",
+                    avatar = u?.Avatar,
+                    city = v.Location,
+                    services = v.services?.Select(s => s.Name).ToList() ?? new List<string>(),
+                    isVerified = v.IsValidated,
+                    verificationStatus = vDocs.Any(d => d.Status == "pending") ? "under_review" : "pending",
+                    verificationDocs = vDocs.Select(d => new {
+                        type = d.DocumentType,
+                        name = d.FileName,
+                        uploadedAt = d.UploadedAt.ToString("yyyy-MM-dd"),
+                        status = d.Status,
+                        fileUrl = d.FileUrl,
+                        url = d.FileUrl
+                    }).ToList(),
+                    rating = 0,
+                    totalReviews = 0,
+                    totalEarnings = 0,
+                    joinedDate = v.CreatedAt.ToString("yyyy-MM-dd"),
+                    accountStatus = "active"
+                };
+            }).ToList();
+
+            return Ok(response);
+        }
+
+        public class VerifyVendorDto
+        {
+            public string Status { get; set; } = string.Empty;
+            public string? Remarks { get; set; }
         }
 
         [HttpPost("vendors/{id:guid}/verify")]
-        public IActionResult VerifyVendor(Guid id, [FromBody] object dto)
+        public async Task<IActionResult> VerifyVendor(Guid id, [FromBody] VerifyVendorDto dto)
         {
-            return Ok(new { id, verificationStatus = "verified" });
+            var vendor = await _db.Vendors.FindAsync(id);
+            if (vendor == null) return NotFound(new { error = "Vendor not found" });
+
+            if (dto.Status.Equals("verified", StringComparison.OrdinalIgnoreCase) || dto.Status.Equals("approved", StringComparison.OrdinalIgnoreCase))
+            {
+                vendor.IsValidated = true;
+                var docs = await _db.VendorDocuments.Where(d => d.VendorId == id && d.Status == "pending").ToListAsync();
+                foreach(var doc in docs) { doc.Status = "approved"; }
+            }
+            else if (dto.Status.Equals("rejected", StringComparison.OrdinalIgnoreCase) || dto.Status.Equals("action_required", StringComparison.OrdinalIgnoreCase))
+            {
+                var docs = await _db.VendorDocuments.Where(d => d.VendorId == id && d.Status == "pending").ToListAsync();
+                foreach(var doc in docs) { 
+                    doc.Status = dto.Status.ToLower(); 
+                    doc.RejectionReason = dto.Remarks;
+                }
+            }
+            
+            await _db.SaveChangesAsync();
+
+            try
+            {
+                _db.Notifications.Add(new Notification
+                {
+                    Id = Guid.NewGuid(),
+                    UserId = vendor.UserId,
+                    Title = vendor.IsValidated ? "Profile Verified 🎉" : "Verification Update ⚠️",
+                    Message = vendor.IsValidated ? "Your vendor profile has been verified!" : $"Your profile verification was updated. Remarks: {dto.Remarks}",
+                    Type = "verification",
+                    IsRead = false,
+                    CreatedAt = DateTime.UtcNow
+                });
+                await _db.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                Serilog.Log.Warning(ex, "Failed to send notification for vendor verification");
+            }
+
+            return Ok(new { id, verificationStatus = vendor.IsValidated ? "verified" : dto.Status });
         }
 
         // --- Bookings ---
         [HttpGet("bookings")]
-        public IActionResult GetBookings()
+        public async Task<IActionResult> GetBookings()
         {
-            return Ok(new List<object>
+            var bookings = await _db.Bookings.ToListAsync();
+            var result = new List<object>();
+            foreach (var b in bookings)
             {
-                new { id = Guid.NewGuid(), eventName = "Mock Wedding", status = "pending", customerName = "John Doe", city = "Delhi" }
-            });
+                result.Add(await MapBookingToDto(b));
+            }
+            return Ok(result);
+        }
+
+        private async Task<object> MapBookingToDto(Booking b)
+        {
+            var user = await _db.Users.FindAsync(b.UserId);
+            var customerName = user?.Name ?? "Customer";
+            var customerPhone = user?.Phone ?? "";
+            
+            var vendor = await _db.Vendors.FindAsync(b.VendorId);
+            var vendorName = vendor?.BusinessName ?? "Vendor Partner";
+
+            string mappedStatus = b.Status.ToLower();
+            if (mappedStatus == "paid") mappedStatus = "confirmed";
+
+            var services = new List<object>
+            {
+                new
+                {
+                    serviceId = Guid.NewGuid().ToString(),
+                    serviceName = b.PackageName ?? "Full Event Package Service",
+                    category = "Event",
+                    vendorId = b.VendorId.ToString(),
+                    vendorName = vendorName,
+                    price = b.Amount,
+                    status = "confirmed"
+                }
+            };
+
+            var package = b.PackageId.HasValue 
+                ? await _db.Packages.AsNoTracking().FirstOrDefaultAsync(p => p.Id == b.PackageId.Value) 
+                : null;
+
+            if (package != null && package.Includes != null)
+            {
+                foreach (var include in package.Includes)
+                {
+                    services.Add(new
+                    {
+                        serviceId = Guid.NewGuid().ToString(),
+                        serviceName = include,
+                        category = "Included Service",
+                        vendorId = b.VendorId.ToString(),
+                        vendorName = vendorName,
+                        price = 0m,
+                        status = "included"
+                    });
+                }
+            }
+
+            // Fetch review
+            var review = await _db.Reviews.FirstOrDefaultAsync(r => r.BookingId == b.Id && r.Status != "removed");
+            object? reviewInfo = null;
+            if (review != null)
+            {
+                reviewInfo = new
+                {
+                    rating = review.Rating,
+                    comment = review.Comment
+                };
+            }
+
+            // Fetch dispute info
+            object? disputeInfo = null;
+            if (mappedStatus == "disputed")
+            {
+                var disputeLog = await _db.BookingLogs
+                    .Where(l => l.BookingId == b.Id && l.Message.StartsWith("Dispute raised. Reason:"))
+                    .OrderByDescending(l => l.CreatedAt)
+                    .FirstOrDefaultAsync();
+
+                var reason = disputeLog != null 
+                    ? disputeLog.Message.Substring("Dispute raised. Reason:".Length).Trim()
+                    : "Dispute raised.";
+
+                disputeInfo = new
+                {
+                    reason = reason,
+                    status = "open"
+                };
+            }
+
+            // Map eventTypeId
+            string eventTypeId = "wedding";
+            var nameLower = (b.EventName ?? "").ToLower();
+            if (nameLower.Contains("birthday")) eventTypeId = "birthday";
+            else if (nameLower.Contains("corporate")) eventTypeId = "corporate";
+            else if (nameLower.Contains("beauty")) eventTypeId = "beauty";
+            else if (nameLower.Contains("travel")) eventTypeId = "travel";
+            else if (nameLower.Contains("shopping")) eventTypeId = "shopping";
+
+            return new
+            {
+                id = b.Id.ToString(),
+                bookingNumber = $"BK-{b.Id.ToString().Substring(0, 8).ToUpper()}",
+                customerId = b.UserId.ToString(),
+                customerName = customerName,
+                customerPhone = customerPhone,
+                eventTypeId = eventTypeId,
+                eventName = string.IsNullOrWhiteSpace(b.EventName) ? "Event Celebration" : b.EventName,
+                packageId = b.PackageId?.ToString() ?? Guid.NewGuid().ToString(),
+                packageName = string.IsNullOrWhiteSpace(b.PackageName) ? "Premium Celebration Package" : b.PackageName,
+                eventDate = b.EventDate.ToString("yyyy-MM-dd"),
+                venue = string.IsNullOrWhiteSpace(b.Venue) ? "Grand Palace Resort" : b.Venue,
+                city = string.IsNullOrWhiteSpace(b.City) ? (user?.City ?? "Mumbai") : b.City,
+                guestCount = b.GuestCount > 0 ? b.GuestCount : 150,
+                status = mappedStatus,
+                advanceAmount = b.AdvanceAmount,
+                baseAmount = Math.Round((b.TotalAmount - b.DamageCharges) / 1.18m, 2),
+                extraServicesAmount = b.ExtraServicesAmount,
+                damageCharges = b.DamageCharges,
+                damageChargeNotes = b.DamageChargeNotes,
+                isDamageChargeApproved = b.IsDamageChargeApproved,
+                gstPercent = 18,
+                totalAmount = b.TotalAmount,
+                finalPaidAmount = b.FinalPaidAmount,
+                cancelledBy = b.CancelledBy,
+                cancellationReason = b.CancellationReason,
+                disputeInfo = disputeInfo,
+                review = reviewInfo,
+                services = services,
+                createdAt = b.EventDate.AddDays(-30).ToString("yyyy-MM-dd HH:mm")
+            };
         }
 
         [HttpPost("bookings/{id:guid}/note")]

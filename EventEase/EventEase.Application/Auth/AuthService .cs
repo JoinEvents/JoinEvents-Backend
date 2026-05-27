@@ -90,7 +90,8 @@ namespace EventEase.Application.Auth
                 PasswordHash = HashPassword(dto.password),
                 CreatedAt = DateTime.UtcNow,
                 ReferralCode = generatedCode,
-                ReferredById = referrerId
+                ReferredById = referrerId,
+                City = dto.city
             };
             
             if (user.Role.Equals("Customer", StringComparison.OrdinalIgnoreCase))
@@ -104,6 +105,20 @@ namespace EventEase.Application.Auth
                     Description = "Welcome Bonus", 
                     Date = DateTime.UtcNow 
                 });
+            }
+
+            if (user.Role.Equals("Vendor", StringComparison.OrdinalIgnoreCase))
+            {
+                var vendor = new Vendor
+                {
+                    Id = Guid.NewGuid(),
+                    UserId = user.Id,
+                    BusinessName = dto.businessName ?? $"{dto.name}'s Services",
+                    Description = "Vendor partner offering event services.",
+                    Location = dto.city ?? "Hyderabad",
+                    IsValidated = false
+                };
+                _db.Vendors.Add(vendor);
             }
 
             if (referrer != null)

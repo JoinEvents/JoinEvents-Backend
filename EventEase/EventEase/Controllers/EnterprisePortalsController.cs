@@ -111,11 +111,19 @@ namespace EventEase.Api.Controllers
         public async Task<IActionResult> GetAnalytics()
         {
             var userId = GetUserId();
-            var res = await _documents.GetAnalyticsAsync(userId);
+            var res = await _documents.GetAnalyticsForFrontendAsync(userId);
             return Ok(res);
         }
 
         // --- ADMIN & MODERATION SERVICES ---
+
+        [Authorize]
+        [HttpGet("/api/v1/admin/vendors")]
+        public async Task<IActionResult> GetVendors()
+        {
+            var vendors = await _documents.GetAllVendorsForAdminAsync();
+            return Ok(vendors);
+        }
 
         [Authorize]
         [HttpPost("/api/v1/admin/vendors/{vendorId:guid}/moderate")]
