@@ -9,6 +9,12 @@ using EventEase.Application.Vendors;
 
 namespace EventEase.Api.Controllers
 {
+    public class UploadDocumentDto
+    {
+        public IFormFile File { get; set; } = null!;
+        public string DocumentType { get; set; } = string.Empty;
+    }
+
     [ApiController]
     [Route("api/v1/vendor/verification")]
     public class VendorVerificationController : ControllerBase
@@ -119,10 +125,10 @@ namespace EventEase.Api.Controllers
 
         [Authorize(Policy = "Vendor")]
         [HttpPost("upload")]
-        public async Task<IActionResult> UploadDocument([FromForm] IFormFile file, [FromForm] string documentType)
+        public async Task<IActionResult> UploadDocument([FromForm] UploadDocumentDto dto)
         {
-            if (file == null || file.Length == 0) return BadRequest(new { error = "No file uploaded." });
-            if (string.IsNullOrEmpty(documentType)) return BadRequest(new { error = "Document type is required." });
+            if (dto.File == null || dto.File.Length == 0) return BadRequest(new { error = "No file uploaded." });
+            if (string.IsNullOrEmpty(dto.DocumentType)) return BadRequest(new { error = "Document type is required." });
 
             var userId = GetUserId();
             var vendor = await _db.Vendors.FirstOrDefaultAsync(v => v.UserId == userId);
@@ -139,14 +145,14 @@ namespace EventEase.Api.Controllers
                 await _db.SaveChangesAsync();
             }
 
-            var urlPath = await _fileStorage.SaveAsync("verification", file.FileName, file.OpenReadStream(), file.ContentType);
+            var urlPath = await _fileStorage.SaveAsync("verification", dto.File.FileName, dto.File.OpenReadStream(), dto.File.ContentType);
 
             var doc = new VendorDocument
             {
                 Id = Guid.NewGuid(),
                 VendorId = vendor.Id,
-                DocumentType = documentType,
-                FileName = file.FileName,
+                DocumentType = dto.DocumentType,
+                FileName = dto.File.FileName,
                 FileUrl = urlPath,
                 Status = "pending",
                 UploadedAt = DateTime.UtcNow

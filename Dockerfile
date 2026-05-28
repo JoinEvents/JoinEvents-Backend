@@ -2,8 +2,8 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
-# Copy everything from the EventEase subdirectory into /src
-COPY ["EventEase/", "."]
+# Copy solution and project files
+COPY . .
 
 # Restore dependencies using the solution file
 RUN dotnet restore "EventEase.sln"
