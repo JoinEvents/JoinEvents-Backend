@@ -33,6 +33,8 @@ namespace EventEase.Infrastructure.Data
         public DbSet<EventEase.Core.Entities.EventCategory> EventCategories { get; set; }
         public DbSet<LoyaltyTransaction> LoyaltyTransactions { get; set; }
         public DbSet<SupportTicket> SupportTickets { get; set; }
+        public DbSet<Tier> Tiers { get; set; }
+        public DbSet<TierPriceRange> TierPriceRanges { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -90,6 +92,27 @@ namespace EventEase.Infrastructure.Data
             {
                 b.HasIndex(c => c.CategoryKey).IsUnique();
                 b.Property(c => c.StartingPrice).HasPrecision(18, 2);
+            });
+
+            modelBuilder.Entity<Tier>(b =>
+            {
+                b.HasOne(t => t.Category)
+                 .WithMany()
+                 .HasForeignKey(t => t.CategoryId)
+                 .OnDelete(DeleteBehavior.Restrict);
+                b.HasIndex(t => new { t.Name, t.CategoryId }).IsUnique();
+                b.Property(t => t.Icon).HasDefaultValue("bi-layers").HasMaxLength(100);
+                b.Property(t => t.Gradient).HasDefaultValue("linear-gradient(135deg,#6B7280,#374151)").HasMaxLength(250);
+            });
+
+            modelBuilder.Entity<TierPriceRange>(b =>
+            {
+                b.HasOne(p => p.Tier)
+                 .WithMany(t => t.PriceRanges)
+                 .HasForeignKey(p => p.TierId)
+                 .OnDelete(DeleteBehavior.Cascade);
+                b.Property(p => p.MinPrice).HasPrecision(18, 2);
+                b.Property(p => p.MaxPrice).HasPrecision(18, 2);
             });
         }
     }
