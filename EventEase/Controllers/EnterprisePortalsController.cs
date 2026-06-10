@@ -57,6 +57,15 @@ namespace EventEase.Api.Controllers
         }
 
         [Authorize]
+        [HttpGet("/api/v1/rfps")]
+        public async Task<IActionResult> GetMyRfps()
+        {
+            var userId = GetUserId();
+            var rfps = await _portals.GetRfpsByCustomerIdAsync(userId);
+            return Ok(rfps);
+        }
+
+        [Authorize]
         [HttpPost("/api/v1/customer/rfp/{rfpId:guid}/bids/{bidId:guid}/accept")]
         public async Task<IActionResult> AcceptBid(Guid rfpId, Guid bidId)
         {

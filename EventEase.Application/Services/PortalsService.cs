@@ -157,5 +157,74 @@ namespace EventEase.Application.Services
             await _db.SaveChangesAsync();
             return true;
         }
+
+        public async Task<List<object>> GetRfpsByCustomerIdAsync(Guid customerId)
+        {
+            var rfps = await _db.Rfps
+                .Where(r => r.CustomerId == customerId)
+                .OrderByDescending(r => r.CreatedAt)
+                .ToListAsync();
+
+            if (!rfps.Any())
+            {
+                return new List<object>();
+            }
+
+            var rfpIds = rfps.Select(r => r.Id).ToList();
+
+            var bids = await _db.Bids
+                .Where(b => rfpIds.Contains(b.RfpId))
+                .ToListAsync();
+
+            var bidsDict = bids
+                .GroupBy(b => b.RfpId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            var result = new List<object>();
+            foreach (var r in rfps)
+            {
+                bidsDict.TryGetValue(r.Id, out var rfpBids);
+                rfpBids ??= new List<Bid>();
+
+                List<string> servicesNeeded = new List<string>();
+                if (!string.IsNullOrEmpty(r.ServicesNeededJson))
+                {
+                    try
+                    {
+                        servicesNeeded = System.Text.Json.JsonSerializer.Deserialize<List<string>>(r.ServicesNeededJson) ?? new List<string>();
+                    }
+                    catch { }
+                }
+
+                result.Add(new
+                {
+                    id = r.Id.ToString(),
+                    customerId = r.CustomerId.ToString(),
+                    title = r.Title,
+                    eventDate = r.EventDate.ToString("yyyy-MM-dd"),
+                    city = r.City,
+                    guestCount = r.GuestCount,
+                    budgetMin = r.BudgetMin,
+                    budgetMax = r.BudgetMax,
+                    requirements = r.Requirements,
+                    servicesNeeded = servicesNeeded,
+                    status = r.Status,
+                    createdAt = r.CreatedAt,
+                    expiresAt = r.CreatedAt.AddDays(7),
+                    bids = rfpBids.Select(b => new
+                    {
+                        id = b.Id.ToString(),
+                        rfpId = b.RfpId.ToString(),
+                        vendorId = b.VendorId.ToString(),
+                        proposedAmount = b.ProposedAmount,
+                        description = b.Description,
+                        status = b.Status,
+                        submittedAt = b.SubmittedAt
+                    }).ToList()
+                });
+            }
+
+            return result;
+        }
     }
 }

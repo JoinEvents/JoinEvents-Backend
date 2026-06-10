@@ -49,6 +49,18 @@ namespace EventEase.Infrastructure.Data
             modelBuilder.Entity<EventEase.Core.Entities.Booking>()
                 .Property(b => b.Amount)
                 .HasPrecision(18, 2); // 18 digits, 2 decimal places
+            modelBuilder.Entity<EventEase.Core.Entities.Booking>()
+                .Property(b => b.PlatformFeeRate)
+                .HasPrecision(18, 4);
+            modelBuilder.Entity<EventEase.Core.Entities.Booking>()
+                .Property(b => b.PlatformFeeAmount)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<EventEase.Core.Entities.Booking>()
+                .Property(b => b.TdsDeducted)
+                .HasPrecision(18, 2);
+            modelBuilder.Entity<EventEase.Core.Entities.Booking>()
+                .Property(b => b.VendorPayoutAmount)
+                .HasPrecision(18, 2);
             
             modelBuilder.Entity<Package>(b =>
             {

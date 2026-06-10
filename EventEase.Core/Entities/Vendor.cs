@@ -18,5 +18,9 @@ namespace EventEase.Core.Entities
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public ICollection<Service> services { get; set; } = new List<Service>();
 
+        // Subscription fields
+        public string SubscriptionTier { get; set; } = "free";
+        public string? SubscriptionBadge { get; set; }
+        public DateTime? SubscriptionExpiry { get; set; }
     }
 }

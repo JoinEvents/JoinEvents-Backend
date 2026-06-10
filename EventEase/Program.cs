@@ -177,6 +177,30 @@ try
     using (var scope = app.Services.CreateScope())
     {
         var db = scope.ServiceProvider.GetRequiredService<EventEaseDbContext>();
+        
+        // Subscription columns in Vendors
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[Vendors]') AND name = 'SubscriptionTier')
+            BEGIN
+                ALTER TABLE [dbo].[Vendors] ADD [SubscriptionTier] NVARCHAR(50) NOT NULL DEFAULT 'free';
+                ALTER TABLE [dbo].[Vendors] ADD [SubscriptionBadge] NVARCHAR(100) NULL;
+                ALTER TABLE [dbo].[Vendors] ADD [SubscriptionExpiry] DATETIME2 NULL;
+            END");
+
+        // Platform fee, Escrow, and Guarantee columns in Bookings
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[Bookings]') AND name = 'PlatformFeeRate')
+            BEGIN
+                ALTER TABLE [dbo].[Bookings] ADD [PlatformFeeRate] DECIMAL(18,4) NOT NULL DEFAULT 0;
+                ALTER TABLE [dbo].[Bookings] ADD [PlatformFeeAmount] DECIMAL(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE [dbo].[Bookings] ADD [TdsDeducted] DECIMAL(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE [dbo].[Bookings] ADD [VendorPayoutAmount] DECIMAL(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE [dbo].[Bookings] ADD [EscrowStatus] NVARCHAR(50) NOT NULL DEFAULT 'held';
+                ALTER TABLE [dbo].[Bookings] ADD [GuaranteeStatus] NVARCHAR(50) NOT NULL DEFAULT 'active';
+                ALTER TABLE [dbo].[Bookings] ADD [VendorConfirmedAt] DATETIME2 NULL;
+                ALTER TABLE [dbo].[Bookings] ADD [VendorConfirmationDue] DATETIME2 NULL;
+            END");
+
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (
                 SELECT * FROM sys.columns 

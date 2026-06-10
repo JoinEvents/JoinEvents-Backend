@@ -157,6 +157,167 @@ namespace EventEase.Api.Controllers
             };
         }
 
+        private async Task<List<object>> MapBookingsToDtosAsync(List<Booking> bookings)
+        {
+            if (bookings == null || !bookings.Any())
+            {
+                return new List<object>();
+            }
+
+            var userIds = bookings.Select(b => b.UserId).Distinct().ToList();
+            var vendorIds = bookings.Select(b => b.VendorId).Distinct().ToList();
+            var packageIds = bookings.Where(b => b.PackageId.HasValue).Select(b => b.PackageId!.Value).Distinct().ToList();
+            var bookingIds = bookings.Select(b => b.Id).ToList();
+
+            var users = await _db.Users
+                .Where(u => userIds.Contains(u.Id))
+                .AsNoTracking()
+                .ToDictionaryAsync(u => u.Id);
+
+            var vendors = await _db.Vendors
+                .Where(v => vendorIds.Contains(v.Id))
+                .AsNoTracking()
+                .ToDictionaryAsync(v => v.Id);
+
+            var packages = await _db.Packages
+                .Where(p => packageIds.Contains(p.Id))
+                .AsNoTracking()
+                .ToDictionaryAsync(p => p.Id);
+
+            var reviewsList = await _db.Reviews
+                .Where(r => bookingIds.Contains(r.BookingId) && r.Status != "removed")
+                .AsNoTracking()
+                .ToListAsync();
+
+            var reviews = reviewsList
+                .GroupBy(r => r.BookingId)
+                .ToDictionary(g => g.Key, g => g.First());
+
+            var disputeLogs = await _db.BookingLogs
+                .Where(l => bookingIds.Contains(l.BookingId) && l.Message.StartsWith("Dispute raised. Reason:"))
+                .AsNoTracking()
+                .ToListAsync();
+
+            var disputeLogsDict = disputeLogs
+                .GroupBy(l => l.BookingId)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(l => l.CreatedAt).First());
+
+            var result = new List<object>();
+            foreach (var b in bookings)
+            {
+                users.TryGetValue(b.UserId, out var user);
+                var customerName = user?.Name ?? "Customer";
+                var customerPhone = user?.Phone ?? "";
+
+                vendors.TryGetValue(b.VendorId, out var vendor);
+                var vendorName = vendor?.BusinessName ?? "Vendor Partner";
+
+                string mappedStatus = b.Status.ToLower();
+                if (mappedStatus == "paid") mappedStatus = "confirmed";
+
+                var services = new List<object>
+                {
+                    new
+                    {
+                        serviceId = Guid.NewGuid().ToString(),
+                        serviceName = b.PackageName ?? "Full Event Package Service",
+                        category = "Event",
+                        vendorId = b.VendorId.ToString(),
+                        vendorName = vendorName,
+                        price = b.Amount,
+                        status = "confirmed"
+                    }
+                };
+
+                packages.TryGetValue(b.PackageId ?? Guid.Empty, out var package);
+                if (package != null && package.Includes != null)
+                {
+                    foreach (var include in package.Includes)
+                    {
+                        services.Add(new
+                        {
+                            serviceId = Guid.NewGuid().ToString(),
+                            serviceName = include,
+                            category = "Included Service",
+                            vendorId = b.VendorId.ToString(),
+                            vendorName = vendorName,
+                            price = 0m,
+                            status = "included"
+                        });
+                    }
+                }
+
+                reviews.TryGetValue(b.Id, out var review);
+                object? reviewInfo = null;
+                if (review != null)
+                {
+                    reviewInfo = new
+                    {
+                        rating = review.Rating,
+                        comment = review.Comment
+                    };
+                }
+
+                object? disputeInfo = null;
+                if (mappedStatus == "disputed")
+                {
+                    disputeLogsDict.TryGetValue(b.Id, out var disputeLog);
+                    var reason = disputeLog != null 
+                        ? disputeLog.Message.Substring("Dispute raised. Reason:".Length).Trim()
+                        : "Dispute raised.";
+
+                    disputeInfo = new
+                    {
+                        reason = reason,
+                        status = "open"
+                    };
+                }
+
+                string eventTypeId = "wedding";
+                var nameLower = (b.EventName ?? "").ToLower();
+                if (nameLower.Contains("birthday")) eventTypeId = "birthday";
+                else if (nameLower.Contains("corporate")) eventTypeId = "corporate";
+                else if (nameLower.Contains("beauty")) eventTypeId = "beauty";
+                else if (nameLower.Contains("travel")) eventTypeId = "travel";
+                else if (nameLower.Contains("shopping")) eventTypeId = "shopping";
+
+                result.Add(new
+                {
+                    id = b.Id.ToString(),
+                    bookingNumber = $"BK-{b.Id.ToString().Substring(0, 8).ToUpper()}",
+                    customerId = b.UserId.ToString(),
+                    customerName = customerName,
+                    customerPhone = customerPhone,
+                    eventTypeId = eventTypeId,
+                    eventName = string.IsNullOrWhiteSpace(b.EventName) ? "Event Celebration" : b.EventName,
+                    packageId = b.PackageId?.ToString() ?? Guid.NewGuid().ToString(),
+                    packageName = string.IsNullOrWhiteSpace(b.PackageName) ? "Premium Celebration Package" : b.PackageName,
+                    eventDate = b.EventDate.ToString("yyyy-MM-dd"),
+                    venue = string.IsNullOrWhiteSpace(b.Venue) ? "Grand Palace Resort" : b.Venue,
+                    city = string.IsNullOrWhiteSpace(b.City) ? (user?.City ?? "Mumbai") : b.City,
+                    guestCount = b.GuestCount > 0 ? b.GuestCount : 150,
+                    status = mappedStatus,
+                    advanceAmount = b.AdvanceAmount,
+                    baseAmount = Math.Round((b.TotalAmount - b.DamageCharges) / 1.18m, 2),
+                    extraServicesAmount = b.ExtraServicesAmount,
+                    damageCharges = b.DamageCharges,
+                    damageChargeNotes = b.DamageChargeNotes,
+                    isDamageChargeApproved = b.IsDamageChargeApproved,
+                    gstPercent = 18,
+                    totalAmount = b.TotalAmount,
+                    finalPaidAmount = b.FinalPaidAmount,
+                    cancelledBy = b.CancelledBy,
+                    cancellationReason = b.CancellationReason,
+                    disputeInfo = disputeInfo,
+                    review = reviewInfo,
+                    services = services,
+                    createdAt = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm")
+                });
+            }
+
+            return result;
+        }
+
         [HttpGet("/api/v1/bookings")]
         public async Task<IActionResult> GetBookings([FromQuery] string? userId)
         {
@@ -180,12 +341,7 @@ namespace EventEase.Api.Controllers
                 .Where(b => b.UserId == searchUserId)
                 .ToListAsync();
 
-            var result = new List<object>();
-            foreach (var b in bookings)
-            {
-                result.Add(await MapBookingToDto(b));
-            }
-
+            var result = await MapBookingsToDtosAsync(bookings);
             return Ok(result);
         }
 
@@ -224,12 +380,7 @@ namespace EventEase.Api.Controllers
                 .Where(b => b.VendorId == vendor.Id)
                 .ToListAsync();
 
-            var result = new List<object>();
-            foreach (var b in bookings)
-            {
-                result.Add(await MapBookingToDto(b));
-            }
-
+            var result = await MapBookingsToDtosAsync(bookings);
             return Ok(result);
         }
 

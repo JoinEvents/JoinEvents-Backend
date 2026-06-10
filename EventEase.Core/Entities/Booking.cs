@@ -30,5 +30,17 @@ namespace EventEase.Core.Entities
         public string Venue { get; set; } = "Hotel Banquet";
         public string City { get; set; } = "Mumbai";
         public int GuestCount { get; set; } = 100;
+
+        // Platform fee fields
+        public decimal PlatformFeeRate { get; set; } = 0;
+        public decimal PlatformFeeAmount { get; set; } = 0;
+        public decimal TdsDeducted { get; set; } = 0;
+        public decimal VendorPayoutAmount { get; set; } = 0;
+
+        // Escrow and Guarantee fields
+        public string EscrowStatus { get; set; } = "held"; // held, released, refunded
+        public string GuaranteeStatus { get; set; } = "active"; // active, claimed, resolved, expired
+        public DateTime? VendorConfirmedAt { get; set; }
+        public DateTime? VendorConfirmationDue { get; set; }
     }
 }

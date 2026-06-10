@@ -12,5 +12,6 @@ namespace EventEase.Application.Services
         Task<Rfp> CreateRfpAsync(Guid customerId, CreateRfpDto dto);
         Task<Bid> PlaceBidAsync(Guid rfpId, Guid vendorId, PlaceBidDto dto);
         Task<bool> AcceptBidAsync(Guid rfpId, Guid bidId);
+        Task<List<object>> GetRfpsByCustomerIdAsync(Guid customerId);
     }
 }
