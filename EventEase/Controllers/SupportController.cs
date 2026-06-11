@@ -412,9 +412,23 @@ namespace EventEase.Api.Controllers
             var vendorIds = vendors.Select(v => v.Id).ToList();
             var docs = await _db.VendorDocuments.Where(d => vendorIds.Contains(d.VendorId)).ToListAsync();
 
+            var allReviews = await _db.Reviews
+                .Where(r => vendorIds.Contains(r.VendorId) && r.Status != "removed")
+                .ToListAsync();
+
+            var allBookingEarnings = await _db.Bookings
+                .Where(b => vendorIds.Contains(b.VendorId) && (b.Status == "Paid" || b.Status == "confirmed" || b.Status == "completed"))
+                .GroupBy(b => b.VendorId)
+                .Select(g => new { VendorId = g.Key, Total = g.Sum(b => b.TotalAmount) })
+                .ToDictionaryAsync(x => x.VendorId, x => x.Total);
+
             var response = vendors.Select(v => {
                 users.TryGetValue(v.UserId, out var u);
                 var vDocs = docs.Where(d => d.VendorId == v.Id).ToList();
+                var vReviews = allReviews.Where(r => r.VendorId == v.Id).ToList();
+                var avgRating = vReviews.Count > 0 ? Math.Round(vReviews.Average(r => r.Rating), 1) : 0;
+                allBookingEarnings.TryGetValue(v.Id, out var earnings);
+
                 return new {
                     id = v.Id,
                     name = u?.Name ?? "Unknown",
@@ -434,9 +448,9 @@ namespace EventEase.Api.Controllers
                         fileUrl = d.FileUrl,
                         url = d.FileUrl
                     }).ToList(),
-                    rating = 0,
-                    totalReviews = 0,
-                    totalEarnings = 0,
+                    rating = avgRating,
+                    totalReviews = vReviews.Count,
+                    totalEarnings = earnings,
                     joinedDate = v.CreatedAt.ToString("yyyy-MM-dd"),
                     accountStatus = "active"
                 };
@@ -521,19 +535,7 @@ namespace EventEase.Api.Controllers
             string mappedStatus = b.Status.ToLower();
             if (mappedStatus == "paid") mappedStatus = "confirmed";
 
-            var services = new List<object>
-            {
-                new
-                {
-                    serviceId = Guid.NewGuid().ToString(),
-                    serviceName = b.PackageName ?? "Full Event Package Service",
-                    category = "Event",
-                    vendorId = b.VendorId.ToString(),
-                    vendorName = vendorName,
-                    price = b.Amount,
-                    status = "confirmed"
-                }
-            };
+            var services = new List<object>();
 
             var package = b.PackageId.HasValue 
                 ? await _db.Packages.AsNoTracking().FirstOrDefaultAsync(p => p.Id == b.PackageId.Value) 
@@ -597,6 +599,23 @@ namespace EventEase.Api.Controllers
             else if (nameLower.Contains("travel")) eventTypeId = "travel";
             else if (nameLower.Contains("shopping")) eventTypeId = "shopping";
 
+            // Fetch support logs
+            var logs = await _db.BookingLogs
+                .Where(l => l.BookingId == b.Id)
+                .OrderByDescending(l => l.CreatedAt)
+                .ToListAsync();
+
+            var supportLogs = logs.Select(l => new
+            {
+                message = l.Message,
+                actor = l.Actor,
+                date = l.CreatedAt.ToString("yyyy-MM-dd HH:mm")
+            }).ToList();
+
+            // Resolve assignedTo from the latest assignment log
+            var assignedLog = logs.FirstOrDefault(l => l.Message.StartsWith("Assigned to:"));
+            var assignedTo = assignedLog?.Message.Replace("Assigned to:", "").Trim();
+
             return new
             {
                 id = b.Id.ToString(),
@@ -605,13 +624,13 @@ namespace EventEase.Api.Controllers
                 customerName = customerName,
                 customerPhone = customerPhone,
                 eventTypeId = eventTypeId,
-                eventName = string.IsNullOrWhiteSpace(b.EventName) ? "Event Celebration" : b.EventName,
-                packageId = b.PackageId?.ToString() ?? Guid.NewGuid().ToString(),
-                packageName = string.IsNullOrWhiteSpace(b.PackageName) ? "Premium Celebration Package" : b.PackageName,
+                eventName = b.EventName,
+                packageId = b.PackageId?.ToString(),
+                packageName = b.PackageName,
                 eventDate = b.EventDate.ToString("yyyy-MM-dd"),
-                venue = string.IsNullOrWhiteSpace(b.Venue) ? "Grand Palace Resort" : b.Venue,
-                city = string.IsNullOrWhiteSpace(b.City) ? (user?.City ?? "Mumbai") : b.City,
-                guestCount = b.GuestCount > 0 ? b.GuestCount : 150,
+                venue = b.Venue,
+                city = b.City,
+                guestCount = b.GuestCount,
                 status = mappedStatus,
                 advanceAmount = b.AdvanceAmount,
                 baseAmount = Math.Round((b.TotalAmount - b.DamageCharges) / 1.18m, 2),
@@ -624,42 +643,215 @@ namespace EventEase.Api.Controllers
                 finalPaidAmount = b.FinalPaidAmount,
                 cancelledBy = b.CancelledBy,
                 cancellationReason = b.CancellationReason,
+                assignedTo = assignedTo,
                 disputeInfo = disputeInfo,
                 review = reviewInfo,
                 services = services,
+                supportLogs = supportLogs,
                 createdAt = b.EventDate.AddDays(-30).ToString("yyyy-MM-dd HH:mm")
             };
         }
 
+        // --- Booking Notes (real DB) ---
+        public class BookingNoteDto { public string Note { get; set; } = ""; }
+
         [HttpPost("bookings/{id:guid}/note")]
-        public IActionResult AddBookingNote(Guid id, [FromBody] object dto)
+        public async Task<IActionResult> AddBookingNote(Guid id, [FromBody] BookingNoteDto dto)
         {
-            return Ok(new { id, status = "pending" });
+            var booking = await _db.Bookings.FindAsync(id);
+            if (booking == null) return NotFound(new { error = "Booking not found" });
+
+            var log = new BookingLog
+            {
+                Id = Guid.NewGuid(),
+                BookingId = id,
+                Message = dto.Note,
+                Actor = User.FindFirstValue(ClaimTypes.Name) ?? "Support Agent",
+                CreatedAt = DateTime.UtcNow
+            };
+            _db.BookingLogs.Add(log);
+            await _db.SaveChangesAsync();
+
+            return Ok(new { id, status = booking.Status.ToLower(), logId = log.Id });
         }
+
+        // --- Notify Customer (real DB) ---
+        public class UserUpdateDto { public string Message { get; set; } = ""; }
 
         [HttpPost("bookings/{id:guid}/user-update")]
-        public IActionResult UpdateBookingUser(Guid id, [FromBody] object dto)
+        public async Task<IActionResult> UpdateBookingUser(Guid id, [FromBody] UserUpdateDto dto)
         {
-            return Ok(new { id, status = "pending" });
+            var booking = await _db.Bookings.FindAsync(id);
+            if (booking == null) return NotFound(new { error = "Booking not found" });
+
+            // Log it
+            _db.BookingLogs.Add(new BookingLog
+            {
+                Id = Guid.NewGuid(),
+                BookingId = id,
+                Message = $"Customer notified: {dto.Message}",
+                Actor = User.FindFirstValue(ClaimTypes.Name) ?? "Support Agent",
+                CreatedAt = DateTime.UtcNow
+            });
+
+            // Send notification to the customer
+            _db.Notifications.Add(new Notification
+            {
+                Id = Guid.NewGuid(),
+                UserId = booking.UserId,
+                Title = "Booking Update 📋",
+                Message = dto.Message,
+                Type = "booking",
+                IsRead = false,
+                CreatedAt = DateTime.UtcNow
+            });
+
+            await _db.SaveChangesAsync();
+            return Ok(new { id, status = booking.Status.ToLower(), notified = true });
         }
+
+        // --- Remind Vendor (real DB) ---
+        public class VendorReminderDto { public string VendorId { get; set; } = ""; }
 
         [HttpPost("bookings/{id:guid}/vendor-reminder")]
-        public IActionResult RemindVendorBooking(Guid id, [FromBody] object dto)
+        public async Task<IActionResult> RemindVendorBooking(Guid id, [FromBody] VendorReminderDto dto)
         {
-            return Ok(new { id, status = "pending" });
+            var booking = await _db.Bookings.FindAsync(id);
+            if (booking == null) return NotFound(new { error = "Booking not found" });
+
+            // Resolve vendor user
+            Guid vendorEntityId = Guid.Empty;
+            if (!string.IsNullOrEmpty(dto.VendorId) && Guid.TryParse(dto.VendorId, out var parsed))
+                vendorEntityId = parsed;
+            else
+                vendorEntityId = booking.VendorId;
+
+            var vendor = await _db.Vendors.FindAsync(vendorEntityId);
+            if (vendor == null) return NotFound(new { error = "Vendor not found" });
+
+            // Send notification to vendor's user account
+            _db.Notifications.Add(new Notification
+            {
+                Id = Guid.NewGuid(),
+                UserId = vendor.UserId,
+                Title = "Booking Reminder ⏰",
+                Message = $"Reminder for booking {booking.EventName} on {booking.EventDate:yyyy-MM-dd}. Please confirm your availability.",
+                Type = "booking",
+                IsRead = false,
+                CreatedAt = DateTime.UtcNow
+            });
+
+            // Log the reminder
+            _db.BookingLogs.Add(new BookingLog
+            {
+                Id = Guid.NewGuid(),
+                BookingId = id,
+                Message = $"Vendor reminder sent to {vendor.BusinessName}.",
+                Actor = User.FindFirstValue(ClaimTypes.Name) ?? "Support Agent",
+                CreatedAt = DateTime.UtcNow
+            });
+
+            await _db.SaveChangesAsync();
+            return Ok(new { id, status = booking.Status.ToLower(), reminded = true });
         }
 
-        // --- Reviews ---
+        // --- Reviews (real DB) ---
         [HttpGet("reviews/flagged")]
-        public IActionResult GetFlaggedReviews()
+        public async Task<IActionResult> GetFlaggedReviews()
         {
-            return Ok(new List<object>());
+            var flaggedReviews = await _db.Reviews
+                .Where(r => r.Status == "flagged")
+                .OrderByDescending(r => r.CreatedAt)
+                .ToListAsync();
+
+            var userIds = flaggedReviews.Select(r => r.UserId).Distinct().ToList();
+            var vendorIds = flaggedReviews.Select(r => r.VendorId).Distinct().ToList();
+            var bookingIds = flaggedReviews.Select(r => r.BookingId).Distinct().ToList();
+
+            var users = await _db.Users
+                .Where(u => userIds.Contains(u.Id))
+                .ToDictionaryAsync(u => u.Id, u => u);
+
+            var vendors = await _db.Vendors
+                .Where(v => vendorIds.Contains(v.Id))
+                .ToDictionaryAsync(v => v.Id, v => v);
+
+            var bookings = await _db.Bookings
+                .Where(b => bookingIds.Contains(b.Id))
+                .ToDictionaryAsync(b => b.Id, b => b);
+
+            var response = flaggedReviews.Select(r =>
+            {
+                users.TryGetValue(r.UserId, out var customer);
+                vendors.TryGetValue(r.VendorId, out var vendor);
+                bookings.TryGetValue(r.BookingId, out var booking);
+
+                return new
+                {
+                    id = r.Id,
+                    bookingId = r.BookingId,
+                    vendorId = r.VendorId,
+                    vendorName = vendor?.BusinessName ?? "Vendor",
+                    customerId = r.UserId,
+                    customerName = customer?.Name ?? r.CustomerName,
+                    eventName = booking?.EventName ?? r.EventName,
+                    rating = r.Rating,
+                    comment = r.Comment,
+                    status = r.Status,
+                    disputeReason = r.DisputeReason,
+                    createdAt = r.CreatedAt
+                };
+            }).ToList();
+
+            return Ok(response);
         }
+
+        public class ModerateReviewDto { public string Action { get; set; } = "keep"; }
 
         [HttpPost("reviews/{id:guid}/moderate")]
-        public IActionResult ModerateReview(Guid id, [FromBody] object dto)
+        public async Task<IActionResult> ModerateReview(Guid id, [FromBody] ModerateReviewDto dto)
         {
-            return Ok(new { success = true });
+            var review = await _db.Reviews.FindAsync(id);
+            if (review == null) return NotFound(new { error = "Review not found" });
+
+            if (dto.Action.Equals("remove", StringComparison.OrdinalIgnoreCase))
+            {
+                review.Status = "removed";
+            }
+            else
+            {
+                // "keep" — restore to published and clear dispute
+                review.Status = "published";
+                review.DisputeReason = null;
+            }
+
+            await _db.SaveChangesAsync();
+
+            // Notify the review author
+            try
+            {
+                var message = dto.Action.Equals("remove", StringComparison.OrdinalIgnoreCase)
+                    ? "Your review has been removed after moderation."
+                    : "Your flagged review has been reviewed and kept published.";
+
+                _db.Notifications.Add(new Notification
+                {
+                    Id = Guid.NewGuid(),
+                    UserId = review.UserId,
+                    Title = "Review Moderation Update",
+                    Message = message,
+                    Type = "general",
+                    IsRead = false,
+                    CreatedAt = DateTime.UtcNow
+                });
+                await _db.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                Serilog.Log.Warning(ex, "Failed to send review moderation notification");
+            }
+
+            return Ok(new { success = true, id, status = review.Status });
         }
     }
 }

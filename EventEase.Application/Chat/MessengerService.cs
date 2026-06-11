@@ -25,6 +25,10 @@ namespace EventEase.Application.Chat
             var recipientIds = threads.Select(t => t.CustomerId == userId ? t.VendorId : t.CustomerId).Distinct().ToList();
             var recipients = await _db.Users.Where(u => recipientIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id, u => u);
 
+            var vendorUserIds = threads.Select(t => t.VendorId).Distinct().ToList();
+            var vendorsList = await _db.Vendors.Where(v => vendorUserIds.Contains(v.UserId)).ToListAsync();
+            var vendorsDict = vendorsList.GroupBy(v => v.UserId).ToDictionary(g => g.Key, g => g.First());
+
             var rfpIds = threads.Where(t => t.RfpId.HasValue).Select(t => t.RfpId!.Value).Distinct().ToList();
             var rfps = await _db.Rfps.Where(r => rfpIds.Contains(r.Id)).ToDictionaryAsync(r => r.Id, r => r);
 
@@ -54,6 +58,27 @@ namespace EventEase.Application.Chat
                 var lastMsg = lastMsgDict.GetValueOrDefault(t.Id);
                 var displayUnreadCount = lastMsg != null && lastMsg.SenderId != userId ? t.UnreadCount : 0;
 
+                string recipientName = "Unknown";
+                string? mappedVendorIdStr = null;
+
+                if (isCustomer)
+                {
+                    var vendorProfile = vendorsDict.GetValueOrDefault(t.VendorId);
+                    if (vendorProfile != null)
+                    {
+                        recipientName = vendorProfile.BusinessName;
+                        mappedVendorIdStr = vendorProfile.Id.ToString();
+                    }
+                    else
+                    {
+                        recipientName = recipient?.Name ?? "Unknown";
+                    }
+                }
+                else
+                {
+                    recipientName = recipient?.Name ?? "Unknown";
+                }
+
                 string? eventTitle = null;
                 if (t.RfpId.HasValue && rfps.TryGetValue(t.RfpId.Value, out var rfp))
                 {
@@ -74,13 +99,14 @@ namespace EventEase.Application.Chat
                 return new ThreadPreviewResponse(
                     t.Id.ToString(),
                     recipientId.ToString(),
-                    recipient?.Name ?? "Unknown",
+                    recipientName,
                     recipient?.Avatar,
                     t.LastMessage ?? "",
                     displayUnreadCount,
                     DateTime.SpecifyKind(t.UpdatedAt, DateTimeKind.Utc),
                     t.Status,
-                    eventTitle
+                    eventTitle,
+                    mappedVendorIdStr
                 );
             }).ToList();
         }
@@ -180,9 +206,12 @@ namespace EventEase.Application.Chat
 
         public async Task<Guid> RequestChatAsync(Guid customerId, Guid vendorId, Guid? rfpId, string? initialMessage)
         {
+            var vendor = await _db.Vendors.FindAsync(vendorId);
+            var vendorUserId = vendor != null ? vendor.UserId : vendorId;
+
             var now = DateTime.UtcNow;
             var thread = await _db.ChatThreads.FirstOrDefaultAsync(t => 
-                t.CustomerId == customerId && t.VendorId == vendorId && t.RfpId == rfpId);
+                t.CustomerId == customerId && t.VendorId == vendorUserId && t.RfpId == rfpId);
 
             if (thread == null)
             {
@@ -190,7 +219,7 @@ namespace EventEase.Application.Chat
                 {
                     Id = Guid.NewGuid(),
                     CustomerId = customerId,
-                    VendorId = vendorId,
+                    VendorId = vendorUserId,
                     RfpId = rfpId,
                     Status = "Pending",
                     LastMessage = initialMessage,

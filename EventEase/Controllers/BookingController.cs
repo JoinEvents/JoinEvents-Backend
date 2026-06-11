@@ -47,19 +47,7 @@ namespace EventEase.Api.Controllers
             string mappedStatus = b.Status.ToLower();
             if (mappedStatus == "paid") mappedStatus = "confirmed";
 
-            var services = new List<object>
-            {
-                new
-                {
-                    serviceId = Guid.NewGuid().ToString(),
-                    serviceName = b.PackageName ?? "Full Event Package Service",
-                    category = "Event",
-                    vendorId = b.VendorId.ToString(),
-                    vendorName = vendorName,
-                    price = b.Amount,
-                    status = "confirmed"
-                }
-            };
+            var services = new List<object>();
 
             var package = b.PackageId.HasValue 
                 ? await _db.Packages.AsNoTracking().FirstOrDefaultAsync(p => p.Id == b.PackageId.Value) 
@@ -131,13 +119,13 @@ namespace EventEase.Api.Controllers
                 customerName = customerName,
                 customerPhone = customerPhone,
                 eventTypeId = eventTypeId,
-                eventName = string.IsNullOrWhiteSpace(b.EventName) ? "Event Celebration" : b.EventName,
-                packageId = b.PackageId?.ToString() ?? Guid.NewGuid().ToString(),
-                packageName = string.IsNullOrWhiteSpace(b.PackageName) ? "Premium Celebration Package" : b.PackageName,
+                eventName = b.EventName,
+                packageId = b.PackageId?.ToString(),
+                packageName = b.PackageName,
                 eventDate = b.EventDate.ToString("yyyy-MM-dd"),
-                venue = string.IsNullOrWhiteSpace(b.Venue) ? "Grand Palace Resort" : b.Venue,
-                city = string.IsNullOrWhiteSpace(b.City) ? (user?.City ?? "Mumbai") : b.City,
-                guestCount = b.GuestCount > 0 ? b.GuestCount : 150,
+                venue = b.Venue,
+                city = b.City,
+                guestCount = b.GuestCount,
                 status = mappedStatus,
                 advanceAmount = b.AdvanceAmount,
                 baseAmount = Math.Round((b.TotalAmount - b.DamageCharges) / 1.18m, 2),
@@ -215,19 +203,7 @@ namespace EventEase.Api.Controllers
                 string mappedStatus = b.Status.ToLower();
                 if (mappedStatus == "paid") mappedStatus = "confirmed";
 
-                var services = new List<object>
-                {
-                    new
-                    {
-                        serviceId = Guid.NewGuid().ToString(),
-                        serviceName = b.PackageName ?? "Full Event Package Service",
-                        category = "Event",
-                        vendorId = b.VendorId.ToString(),
-                        vendorName = vendorName,
-                        price = b.Amount,
-                        status = "confirmed"
-                    }
-                };
+                var services = new List<object>();
 
                 packages.TryGetValue(b.PackageId ?? Guid.Empty, out var package);
                 if (package != null && package.Includes != null)
@@ -289,13 +265,13 @@ namespace EventEase.Api.Controllers
                     customerName = customerName,
                     customerPhone = customerPhone,
                     eventTypeId = eventTypeId,
-                    eventName = string.IsNullOrWhiteSpace(b.EventName) ? "Event Celebration" : b.EventName,
-                    packageId = b.PackageId?.ToString() ?? Guid.NewGuid().ToString(),
-                    packageName = string.IsNullOrWhiteSpace(b.PackageName) ? "Premium Celebration Package" : b.PackageName,
+                    eventName = b.EventName,
+                    packageId = b.PackageId?.ToString(),
+                    packageName = b.PackageName,
                     eventDate = b.EventDate.ToString("yyyy-MM-dd"),
-                    venue = string.IsNullOrWhiteSpace(b.Venue) ? "Grand Palace Resort" : b.Venue,
-                    city = string.IsNullOrWhiteSpace(b.City) ? (user?.City ?? "Mumbai") : b.City,
-                    guestCount = b.GuestCount > 0 ? b.GuestCount : 150,
+                    venue = b.Venue,
+                    city = b.City,
+                    guestCount = b.GuestCount,
                     status = mappedStatus,
                     advanceAmount = b.AdvanceAmount,
                     baseAmount = Math.Round((b.TotalAmount - b.DamageCharges) / 1.18m, 2),
@@ -416,29 +392,6 @@ namespace EventEase.Api.Controllers
                 .OrderBy(l => l.CreatedAt)
                 .ToListAsync();
 
-            if (!logs.Any())
-            {
-                var booking = await _db.Bookings.FindAsync(bookingId);
-                if (booking != null)
-                {
-                    logs = new List<BookingLog>
-                    {
-                        new BookingLog { Id = Guid.NewGuid(), BookingId = bookingId, Message = "Booking request submitted and pending vendor approval.", Actor = "Customer", CreatedAt = booking.EventDate.AddDays(-30) },
-                        new BookingLog { Id = Guid.NewGuid(), BookingId = bookingId, Message = "Advance payment received. Booking confirmed.", Actor = "System", CreatedAt = booking.EventDate.AddDays(-28) }
-                    };
-
-                    if (booking.Status.Equals("inprogress", StringComparison.OrdinalIgnoreCase))
-                    {
-                        logs.Add(new BookingLog { Id = Guid.NewGuid(), BookingId = bookingId, Message = "Catering menu finalized. Floral arrangements are being sourced.", Actor = "Vendor", CreatedAt = DateTime.UtcNow.AddDays(-1) });
-                    }
-                    else if (booking.Status.Equals("completed", StringComparison.OrdinalIgnoreCase))
-                    {
-                        logs.Add(new BookingLog { Id = Guid.NewGuid(), BookingId = bookingId, Message = "Catering menu finalized. Floral arrangements are being sourced.", Actor = "Vendor", CreatedAt = booking.EventDate.AddDays(-1) });
-                        logs.Add(new BookingLog { Id = Guid.NewGuid(), BookingId = bookingId, Message = "Event successfully concluded.", Actor = "System", CreatedAt = booking.EventDate });
-                    }
-                }
-            }
-
             return Ok(logs);
         }
 
@@ -520,6 +473,16 @@ namespace EventEase.Api.Controllers
                 {
                     string description = $"Earned points for Booking BK-{booking.Id.ToString().Substring(0, 8).ToUpper()}";
                     await _loyaltyService.AddPointsAsync(booking.UserId, pointsEarned, description, booking.Id);
+                }
+
+                // Close RFP if booking is linked to one
+                if (booking.RfpId.HasValue)
+                {
+                    var rfp = await _db.Rfps.FindAsync(booking.RfpId.Value);
+                    if (rfp != null && rfp.Status == "bid_selected")
+                    {
+                        rfp.Status = "closed";
+                    }
                 }
             }
             await _db.SaveChangesAsync();

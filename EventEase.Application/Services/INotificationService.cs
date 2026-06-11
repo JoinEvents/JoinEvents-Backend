@@ -11,5 +11,6 @@ namespace EventEase.Application.Services
         Task<int> MarkAllAsReadAsync(Guid userId);
         Task<bool> DeleteNotificationAsync(Guid id, Guid userId);
         Task<int> ClearAllNotificationsAsync(Guid userId);
+        Task<Notification> CreateNotificationAsync(Guid userId, string title, string message, string type);
     }
 }

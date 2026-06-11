@@ -302,6 +302,17 @@ try
                 ALTER TABLE [dbo].[ChatMessages] ADD [IsInternal] BIT NOT NULL DEFAULT 0;
             END");
             
+        // Repair any broken ChatThreads that store VendorId instead of UserId
+        db.Database.ExecuteSqlRaw(@"
+            IF EXISTS (SELECT * FROM sys.tables WHERE name = 'ChatThreads' AND type = 'U')
+            BEGIN
+                UPDATE ChatThreads
+                SET VendorId = v.UserId
+                FROM ChatThreads t
+                JOIN Vendors v ON t.VendorId = v.Id
+                WHERE t.VendorId NOT IN (SELECT Id FROM Users);
+            END");
+            
         Console.WriteLine("[Startup DB Schema Check] Package verification status, User notifications, Avatar, AttachmentUrl, BookingId, Priority, and IsInternal columns verified/added successfully.");
     }
 }

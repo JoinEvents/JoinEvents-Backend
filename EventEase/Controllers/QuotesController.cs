@@ -5,6 +5,7 @@ using System.Security.Claims;
 using System.Threading.Tasks;
 using EventEase.Core.Entities;
 using EventEase.Infrastructure.Data;
+using EventEase.Application.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -17,10 +18,12 @@ namespace EventEase.Api.Controllers
     public class QuotesController : ControllerBase
     {
         private readonly EventEaseDbContext _db;
+        private readonly INotificationService _notificationService;
 
-        public QuotesController(EventEaseDbContext db)
+        public QuotesController(EventEaseDbContext db, INotificationService notificationService)
         {
             _db = db;
+            _notificationService = notificationService;
         }
 
         // Requests Payload
@@ -361,46 +364,115 @@ namespace EventEase.Api.Controllers
         [HttpPost("{rfpId:guid}/offers/{offerId:guid}/accept")]
         public async Task<IActionResult> AcceptOffer(Guid rfpId, Guid offerId)
         {
-            using var transaction = await _db.Database.BeginTransactionAsync();
-            try
+            var strategy = _db.Database.CreateExecutionStrategy();
+            return await strategy.ExecuteAsync<IActionResult>(async () =>
             {
-                var rfp = await _db.Rfps.FindAsync(rfpId);
-                if (rfp == null)
+                using var transaction = await _db.Database.BeginTransactionAsync();
+                try
                 {
-                    return NotFound(new { success = false, message = "Quote request not found." });
-                }
+                    var rfp = await _db.Rfps.FindAsync(rfpId);
+                    if (rfp == null)
+                    {
+                        return NotFound(new { success = false, message = "Quote request not found." });
+                    }
 
-                var customerId = GetUserId();
-                if (rfp.CustomerId != customerId)
+                    var customerId = GetUserId();
+                    if (rfp.CustomerId != customerId)
+                    {
+                        return Forbid();
+                    }
+
+                    var bids = await _db.Bids.Where(b => b.RfpId == rfpId).ToListAsync();
+                    var selectedBid = bids.FirstOrDefault(b => b.Id == offerId);
+                    if (selectedBid == null)
+                    {
+                        return NotFound(new { success = false, message = "Offer not found." });
+                    }
+
+                    // Accept chosen, reject others
+                    foreach (var bid in bids)
+                    {
+                        bid.Status = bid.Id == offerId ? "accepted" : "rejected";
+                    }
+
+                    rfp.Status = "bid_selected";
+
+                    // 1. Auto-create Booking
+                    var vendor = await _db.Vendors.FindAsync(selectedBid.VendorId);
+                    decimal totalAmount = selectedBid.ProposedAmount * 1.18m;
+                    decimal advanceAmount = totalAmount * 0.20m;
+
+                    var booking = new Booking
+                    {
+                        Id = Guid.NewGuid(),
+                        RfpId = rfp.Id,
+                        UserId = customerId,
+                        VendorId = selectedBid.VendorId,
+                        EventDate = rfp.EventDate,
+                        Amount = selectedBid.ProposedAmount,
+                        TotalAmount = totalAmount,
+                        AdvanceAmount = advanceAmount,
+                        EventName = rfp.Title,
+                        City = rfp.City,
+                        Venue = string.IsNullOrEmpty(rfp.VenueName) ? rfp.Locality ?? "Venue" : rfp.VenueName,
+                        GuestCount = rfp.GuestCount,
+                        Status = "Pending"
+                    };
+
+                    _db.Bookings.Add(booking);
+
+                    // 2. Send Notifications
+                    if (vendor != null)
+                    {
+                        await _notificationService.CreateNotificationAsync(vendor.UserId, 
+                            "Bid Accepted!", 
+                            $"Your bid for '{rfp.Title}' has been accepted! A booking has been created.", 
+                            "rfp");
+                    }
+
+                    foreach (var bid in bids.Where(b => b.Id != offerId))
+                    {
+                        var rejectedVendor = await _db.Vendors.FindAsync(bid.VendorId);
+                        if (rejectedVendor != null)
+                        {
+                            await _notificationService.CreateNotificationAsync(rejectedVendor.UserId, 
+                                "Bid Not Selected", 
+                                $"Your bid for '{rfp.Title}' was not selected. Better luck next time!", 
+                                "rfp");
+                        }
+                    }
+
+                    await _notificationService.CreateNotificationAsync(customerId, 
+                        "Bid Accepted", 
+                        $"You've accepted a bid for '{rfp.Title}'. Proceed to payment to confirm your booking.", 
+                        "rfp");
+
+                    await _db.SaveChangesAsync();
+                    await transaction.CommitAsync();
+
+                    // 3. Return booking details
+                    return Ok(new 
+                    { 
+                        success = true, 
+                        data = new 
+                        {
+                            bookingId = booking.Id,
+                            vendorId = booking.VendorId,
+                            basePrice = booking.Amount,
+                            gstAmount = booking.TotalAmount - booking.Amount,
+                            totalAmount = booking.TotalAmount,
+                            advanceAmount = booking.AdvanceAmount,
+                            payableAmount = booking.AdvanceAmount
+                        } 
+                    });
+                }
+                catch (Exception ex)
                 {
-                    return Forbid();
+                    Console.WriteLine("ACCEPT OFFER ERROR: " + ex.ToString());
+                    await transaction.RollbackAsync();
+                    return StatusCode(500, new { success = false, message = "Error accepting offer: " + ex.Message });
                 }
-
-                var bids = await _db.Bids.Where(b => b.RfpId == rfpId).ToListAsync();
-                var selectedBid = bids.FirstOrDefault(b => b.Id == offerId);
-                if (selectedBid == null)
-                {
-                    return NotFound(new { success = false, message = "Offer not found." });
-                }
-
-                // Accept chosen, reject others
-                foreach (var bid in bids)
-                {
-                    bid.Status = bid.Id == offerId ? "accepted" : "rejected";
-                }
-
-                rfp.Status = "bid_selected";
-
-                await _db.SaveChangesAsync();
-                await transaction.CommitAsync();
-
-                return Ok(new { success = true, data = true });
-            }
-            catch (Exception ex)
-            {
-                await transaction.RollbackAsync();
-                return StatusCode(500, new { success = false, message = "Error accepting offer: " + ex.Message });
-            }
+            });
         }
     }
 }

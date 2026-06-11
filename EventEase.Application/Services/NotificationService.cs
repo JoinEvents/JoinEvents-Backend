@@ -59,5 +59,23 @@ namespace EventEase.Application.Services
             await _db.SaveChangesAsync();
             return list.Count;
         }
+
+        public async Task<Notification> CreateNotificationAsync(Guid userId, string title, string message, string type)
+        {
+            var notification = new Notification
+            {
+                Id = Guid.NewGuid(),
+                UserId = userId,
+                Title = title,
+                Message = message,
+                Type = type,
+                IsRead = false,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _db.Notifications.Add(notification);
+            await _db.SaveChangesAsync();
+            return notification;
+        }
     }
 }
