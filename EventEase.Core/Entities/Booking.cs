@@ -24,6 +24,14 @@ namespace EventEase.Core.Entities
         public decimal? FinalPaidAmount { get; set; }
         public string? CancelledBy { get; set; }
         public string? CancellationReason { get; set; }
+        public DateTime? CancellationDate { get; set; }
+        public decimal CancellationFee { get; set; } = 0;
+        public decimal PlatformCancellationFeeRetained { get; set; } = 0;
+        public decimal RefundAmount { get; set; } = 0;
+        public string RefundStatus { get; set; } = "none"; // none, pending, processed, failed
+        public string? RefundTransactionId { get; set; }
+        public decimal VendorPenaltyAmount { get; set; } = 0;
+        public bool VendorStrikeApplied { get; set; } = false;
         public Guid? PackageId { get; set; }
         public string? PackageName { get; set; }
         public string EventName { get; set; } = "Event Celebration";

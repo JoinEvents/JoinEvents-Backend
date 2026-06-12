@@ -128,6 +128,7 @@ builder.Services.AddDbContext<EventEaseDbContext>(o =>
 //builder.Services.AddScoped<IOtpService, RedisOtpService>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<IVendorService, VendorService>();
+builder.Services.AddScoped<IVendorCalendarService, VendorCalendarService>();
 builder.Services.AddScoped<IFileStorage, LocalFileStorage>();
 builder.Services.AddScoped<IPricingEngine, SimplePricingEngine>();
 builder.Services.AddScoped<ICartService, CartService>();

@@ -87,7 +87,9 @@ namespace EventEase.Application.Chat
 
                 if (string.IsNullOrEmpty(eventTitle))
                 {
-                    var booking = bookings.FirstOrDefault(b => b.UserId == t.CustomerId && b.VendorId == t.VendorId);
+                    var booking = t.RfpId.HasValue
+                        ? bookings.FirstOrDefault(b => b.Id == t.RfpId.Value)
+                        : bookings.FirstOrDefault(b => b.UserId == t.CustomerId && b.VendorId == t.VendorId);
                     if (booking != null)
                     {
                         eventTitle = !string.IsNullOrEmpty(booking.EventName)
@@ -106,7 +108,8 @@ namespace EventEase.Application.Chat
                     DateTime.SpecifyKind(t.UpdatedAt, DateTimeKind.Utc),
                     t.Status,
                     eventTitle,
-                    mappedVendorIdStr
+                    mappedVendorIdStr,
+                    t.RfpId?.ToString()
                 );
             }).ToList();
         }

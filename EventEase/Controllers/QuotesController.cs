@@ -364,115 +364,130 @@ namespace EventEase.Api.Controllers
         [HttpPost("{rfpId:guid}/offers/{offerId:guid}/accept")]
         public async Task<IActionResult> AcceptOffer(Guid rfpId, Guid offerId)
         {
-            var strategy = _db.Database.CreateExecutionStrategy();
-            return await strategy.ExecuteAsync<IActionResult>(async () =>
+            try
             {
-                using var transaction = await _db.Database.BeginTransactionAsync();
-                try
+                var rfp = await _db.Rfps.FindAsync(rfpId);
+                if (rfp == null)
                 {
-                    var rfp = await _db.Rfps.FindAsync(rfpId);
-                    if (rfp == null)
-                    {
-                        return NotFound(new { success = false, message = "Quote request not found." });
-                    }
+                    return NotFound(new { success = false, message = "Quote request not found." });
+                }
 
-                    var customerId = GetUserId();
-                    if (rfp.CustomerId != customerId)
-                    {
-                        return Forbid();
-                    }
+                var customerId = GetUserId();
+                if (rfp.CustomerId != customerId)
+                {
+                    return Forbid();
+                }
 
-                    var bids = await _db.Bids.Where(b => b.RfpId == rfpId).ToListAsync();
-                    var selectedBid = bids.FirstOrDefault(b => b.Id == offerId);
-                    if (selectedBid == null)
-                    {
-                        return NotFound(new { success = false, message = "Offer not found." });
-                    }
+                var bids = await _db.Bids.Where(b => b.RfpId == rfpId).ToListAsync();
+                var selectedBid = bids.FirstOrDefault(b => b.Id == offerId);
+                if (selectedBid == null)
+                {
+                    return NotFound(new { success = false, message = "Offer not found." });
+                }
 
-                    // Accept chosen, reject others
-                    foreach (var bid in bids)
-                    {
-                        bid.Status = bid.Id == offerId ? "accepted" : "rejected";
-                    }
+                // Accept chosen, reject others
+                foreach (var bid in bids)
+                {
+                    bid.Status = bid.Id == offerId ? "accepted" : "rejected";
+                }
 
-                    rfp.Status = "bid_selected";
+                rfp.Status = "bid_selected";
 
-                    // 1. Auto-create Booking
-                    var vendor = await _db.Vendors.FindAsync(selectedBid.VendorId);
-                    decimal totalAmount = selectedBid.ProposedAmount * 1.18m;
-                    decimal advanceAmount = totalAmount * 0.20m;
+                // 1. Auto-create Booking
+                var vendor = await _db.Vendors.FindAsync(selectedBid.VendorId);
+                decimal totalAmount = selectedBid.ProposedAmount * 1.18m;
+                decimal advanceAmount = totalAmount * 0.20m;
 
-                    var booking = new Booking
-                    {
-                        Id = Guid.NewGuid(),
-                        RfpId = rfp.Id,
-                        UserId = customerId,
-                        VendorId = selectedBid.VendorId,
-                        EventDate = rfp.EventDate,
-                        Amount = selectedBid.ProposedAmount,
-                        TotalAmount = totalAmount,
-                        AdvanceAmount = advanceAmount,
-                        EventName = rfp.Title,
-                        City = rfp.City,
-                        Venue = string.IsNullOrEmpty(rfp.VenueName) ? rfp.Locality ?? "Venue" : rfp.VenueName,
-                        GuestCount = rfp.GuestCount,
-                        Status = "Pending"
-                    };
+                var booking = new Booking
+                {
+                    Id = Guid.NewGuid(),
+                    RfpId = rfp.Id,
+                    UserId = customerId,
+                    VendorId = selectedBid.VendorId,
+                    EventDate = rfp.EventDate,
+                    Amount = selectedBid.ProposedAmount,
+                    TotalAmount = totalAmount,
+                    AdvanceAmount = advanceAmount,
+                    EventName = rfp.Title,
+                    City = rfp.City,
+                    Venue = string.IsNullOrEmpty(rfp.VenueName) ? rfp.Locality ?? "Venue" : rfp.VenueName,
+                    GuestCount = rfp.GuestCount,
+                    Status = "Pending"
+                };
 
-                    _db.Bookings.Add(booking);
+                _db.Bookings.Add(booking);
 
-                    // 2. Send Notifications
-                    if (vendor != null)
+                // Save changes for bids and bookings first (implicit transaction)
+                await _db.SaveChangesAsync();
+
+                // 2. Send Notifications
+                if (vendor != null)
+                {
+                    try
                     {
                         await _notificationService.CreateNotificationAsync(vendor.UserId, 
                             "Bid Accepted!", 
                             $"Your bid for '{rfp.Title}' has been accepted! A booking has been created.", 
                             "rfp");
                     }
-
-                    foreach (var bid in bids.Where(b => b.Id != offerId))
+                    catch (Exception ex)
                     {
-                        var rejectedVendor = await _db.Vendors.FindAsync(bid.VendorId);
-                        if (rejectedVendor != null)
+                        Console.WriteLine("NOTIFICATION ERROR (Winning Vendor): " + ex.Message);
+                    }
+                }
+
+                foreach (var bid in bids.Where(b => b.Id != offerId))
+                {
+                    var rejectedVendor = await _db.Vendors.FindAsync(bid.VendorId);
+                    if (rejectedVendor != null)
+                    {
+                        try
                         {
                             await _notificationService.CreateNotificationAsync(rejectedVendor.UserId, 
                                 "Bid Not Selected", 
                                 $"Your bid for '{rfp.Title}' was not selected. Better luck next time!", 
                                 "rfp");
                         }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine("NOTIFICATION ERROR (Rejected Vendor): " + ex.Message);
+                        }
                     }
+                }
 
+                try
+                {
                     await _notificationService.CreateNotificationAsync(customerId, 
                         "Bid Accepted", 
                         $"You've accepted a bid for '{rfp.Title}'. Proceed to payment to confirm your booking.", 
                         "rfp");
-
-                    await _db.SaveChangesAsync();
-                    await transaction.CommitAsync();
-
-                    // 3. Return booking details
-                    return Ok(new 
-                    { 
-                        success = true, 
-                        data = new 
-                        {
-                            bookingId = booking.Id,
-                            vendorId = booking.VendorId,
-                            basePrice = booking.Amount,
-                            gstAmount = booking.TotalAmount - booking.Amount,
-                            totalAmount = booking.TotalAmount,
-                            advanceAmount = booking.AdvanceAmount,
-                            payableAmount = booking.AdvanceAmount
-                        } 
-                    });
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("ACCEPT OFFER ERROR: " + ex.ToString());
-                    await transaction.RollbackAsync();
-                    return StatusCode(500, new { success = false, message = "Error accepting offer: " + ex.Message });
+                    Console.WriteLine("NOTIFICATION ERROR (Customer): " + ex.Message);
                 }
-            });
+
+                // 3. Return booking details
+                return Ok(new 
+                { 
+                    success = true, 
+                    data = new 
+                    {
+                        bookingId = booking.Id,
+                        vendorId = booking.VendorId,
+                        basePrice = booking.Amount,
+                        gstAmount = booking.TotalAmount - booking.Amount,
+                        totalAmount = booking.TotalAmount,
+                        advanceAmount = booking.AdvanceAmount,
+                        payableAmount = booking.AdvanceAmount
+                    } 
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("ACCEPT OFFER ERROR: " + ex.ToString());
+                return StatusCode(500, new { success = false, message = "Error accepting offer: " + ex.Message });
+            }
         }
     }
 }

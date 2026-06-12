@@ -35,6 +35,7 @@ namespace EventEase.Infrastructure.Data
         public DbSet<SupportTicket> SupportTickets { get; set; }
         public DbSet<Tier> Tiers { get; set; }
         public DbSet<TierPriceRange> TierPriceRanges { get; set; }
+        public DbSet<VendorBlockedDate> VendorBlockedDates { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -125,6 +126,11 @@ namespace EventEase.Infrastructure.Data
                  .OnDelete(DeleteBehavior.Cascade);
                 b.Property(p => p.MinPrice).HasPrecision(18, 2);
                 b.Property(p => p.MaxPrice).HasPrecision(18, 2);
+            });
+
+            modelBuilder.Entity<VendorBlockedDate>(b =>
+            {
+                b.HasIndex(d => new { d.VendorId, d.BlockedDate }).IsUnique();
             });
         }
     }

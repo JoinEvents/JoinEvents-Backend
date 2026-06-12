@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using static EventEase.Application.Checkout.Dtos;
 using EventEase.Application.Loyalty;
+using EventEase.Application.Vendors;
 
 namespace EventEase.Api.Controllers
 {
@@ -16,18 +17,27 @@ namespace EventEase.Api.Controllers
         private readonly EventEaseDbContext _db;
         private readonly IPaymentGateway _gateway;
         private readonly ILoyaltyService _loyaltyService;
+        private readonly IVendorCalendarService _calendarService;
 
-        public BookingController(EventEaseDbContext db, IPaymentGateway gateway, ILoyaltyService loyaltyService)
+        public BookingController(EventEaseDbContext db, IPaymentGateway gateway, ILoyaltyService loyaltyService, IVendorCalendarService calendarService)
         {
             _db = db;
             _gateway = gateway;
             _loyaltyService = loyaltyService;
+            _calendarService = calendarService;
         }
 
         [Authorize(Policy = "User")]
         [HttpPost]
         public async Task<IActionResult> Create([FromBody] Booking dto)
         {
+            // Verify vendor availability before creating the booking
+            var isAvailable = await _calendarService.CheckAvailabilityAsync(dto.VendorId, dto.EventDate);
+            if (!isAvailable)
+            {
+                return BadRequest(new { error = "The vendor is already booked or has blocked the selected date." });
+            }
+
             dto.Id = Guid.NewGuid();
             dto.Status = "Pending";
             _db.Bookings.Add(dto);
@@ -43,6 +53,11 @@ namespace EventEase.Api.Controllers
             
             var vendor = await _db.Vendors.FindAsync(b.VendorId);
             var vendorName = vendor?.BusinessName ?? "Vendor Partner";
+            var vendorLocation = vendor?.Location ?? "";
+            var vendorDescription = vendor?.Description ?? "";
+            var vendorUser = vendor != null ? await _db.Users.FindAsync(vendor.UserId) : null;
+            var vendorPhone = vendorUser?.Phone ?? "";
+            var vendorEmail = vendorUser?.Email ?? "";
 
             string mappedStatus = b.Status.ToLower();
             if (mappedStatus == "paid") mappedStatus = "confirmed";
@@ -118,6 +133,12 @@ namespace EventEase.Api.Controllers
                 customerId = b.UserId.ToString(),
                 customerName = customerName,
                 customerPhone = customerPhone,
+                vendorId = b.VendorId.ToString(),
+                vendorName = vendorName,
+                vendorPhone = vendorPhone,
+                vendorEmail = vendorEmail,
+                vendorLocation = vendorLocation,
+                vendorDescription = vendorDescription,
                 eventTypeId = eventTypeId,
                 eventName = b.EventName,
                 packageId = b.PackageId?.ToString(),
@@ -138,6 +159,15 @@ namespace EventEase.Api.Controllers
                 finalPaidAmount = b.FinalPaidAmount,
                 cancelledBy = b.CancelledBy,
                 cancellationReason = b.CancellationReason,
+                cancellationDate = b.CancellationDate?.ToString("yyyy-MM-dd"),
+                cancellationFee = b.CancellationFee,
+                platformCancellationFeeRetained = b.PlatformCancellationFeeRetained,
+                refundAmount = b.RefundAmount,
+                refundStatus = b.RefundStatus,
+                refundTransactionId = b.RefundTransactionId,
+                vendorPenaltyAmount = b.VendorPenaltyAmount,
+                vendorStrikeApplied = b.VendorStrikeApplied,
+                escrowStatus = b.EscrowStatus.ToLower(),
                 disputeInfo = disputeInfo,
                 review = reviewInfo,
                 services = services,
@@ -157,15 +187,16 @@ namespace EventEase.Api.Controllers
             var packageIds = bookings.Where(b => b.PackageId.HasValue).Select(b => b.PackageId!.Value).Distinct().ToList();
             var bookingIds = bookings.Select(b => b.Id).ToList();
 
-            var users = await _db.Users
-                .Where(u => userIds.Contains(u.Id))
-                .AsNoTracking()
-                .ToDictionaryAsync(u => u.Id);
-
             var vendors = await _db.Vendors
                 .Where(v => vendorIds.Contains(v.Id))
                 .AsNoTracking()
                 .ToDictionaryAsync(v => v.Id);
+ 
+            var allUserIds = userIds.Concat(vendors.Values.Select(v => v.UserId)).Distinct().ToList();
+            var users = await _db.Users
+                .Where(u => allUserIds.Contains(u.Id))
+                .AsNoTracking()
+                .ToDictionaryAsync(u => u.Id);
 
             var packages = await _db.Packages
                 .Where(p => packageIds.Contains(p.Id))
@@ -199,7 +230,17 @@ namespace EventEase.Api.Controllers
 
                 vendors.TryGetValue(b.VendorId, out var vendor);
                 var vendorName = vendor?.BusinessName ?? "Vendor Partner";
-
+                var vendorLocation = vendor?.Location ?? "";
+                var vendorDescription = vendor?.Description ?? "";
+                
+                User? vendorUser = null;
+                if (vendor != null)
+                {
+                    users.TryGetValue(vendor.UserId, out vendorUser);
+                }
+                var vendorPhone = vendorUser?.Phone ?? "";
+                var vendorEmail = vendorUser?.Email ?? "";
+ 
                 string mappedStatus = b.Status.ToLower();
                 if (mappedStatus == "paid") mappedStatus = "confirmed";
 
@@ -264,6 +305,12 @@ namespace EventEase.Api.Controllers
                     customerId = b.UserId.ToString(),
                     customerName = customerName,
                     customerPhone = customerPhone,
+                    vendorId = b.VendorId.ToString(),
+                    vendorName = vendorName,
+                    vendorPhone = vendorPhone,
+                    vendorEmail = vendorEmail,
+                    vendorLocation = vendorLocation,
+                    vendorDescription = vendorDescription,
                     eventTypeId = eventTypeId,
                     eventName = b.EventName,
                     packageId = b.PackageId?.ToString(),
@@ -284,6 +331,15 @@ namespace EventEase.Api.Controllers
                     finalPaidAmount = b.FinalPaidAmount,
                     cancelledBy = b.CancelledBy,
                     cancellationReason = b.CancellationReason,
+                    cancellationDate = b.CancellationDate?.ToString("yyyy-MM-dd"),
+                    cancellationFee = b.CancellationFee,
+                    platformCancellationFeeRetained = b.PlatformCancellationFeeRetained,
+                    refundAmount = b.RefundAmount,
+                    refundStatus = b.RefundStatus,
+                    refundTransactionId = b.RefundTransactionId,
+                    vendorPenaltyAmount = b.VendorPenaltyAmount,
+                    vendorStrikeApplied = b.VendorStrikeApplied,
+                    escrowStatus = b.EscrowStatus.ToLower(),
                     disputeInfo = disputeInfo,
                     review = reviewInfo,
                     services = services,
@@ -336,10 +392,29 @@ namespace EventEase.Api.Controllers
 
         public record ConfirmPaymentRequest(string ProviderRef, string Status);
         public record UpdateStatusRequest(string Status);
-        public record CancelBookingRequest(string Reason, string CancelledBy);
+        public record CancelBookingRequest(
+            string Reason, 
+            string CancelledBy,
+            DateTime? CancellationDate = null,
+            decimal? CancellationFee = null,
+            decimal? PlatformCancellationFeeRetained = null,
+            decimal? RefundAmount = null,
+            string? RefundStatus = null,
+            string? RefundTransactionId = null,
+            decimal? VendorPenaltyAmount = null,
+            bool? VendorStrikeApplied = null
+        );
         public record AddDamageRequest(decimal Amount, string Notes);
         public record RescheduleBookingRequest(DateTime NewDate);
         public record RaiseDisputeRequest(string Reason);
+        public record UpdateCancellationRequest(
+            decimal? RefundAmount = null,
+            decimal? CancellationFee = null,
+            decimal? PlatformCancellationFeeRetained = null,
+            string? RefundStatus = null,
+            string? RefundTransactionId = null,
+            string? EscrowStatus = null
+        );
 
         [Authorize(Policy = "Vendor")]
         [HttpGet("/api/v1/bookings/vendor")]
@@ -531,15 +606,129 @@ namespace EventEase.Api.Controllers
             booking.CancelledBy = req.CancelledBy;
             booking.CancellationReason = req.Reason;
 
+            DateTime cancelDate = req.CancellationDate ?? DateTime.UtcNow;
+            booking.CancellationDate = cancelDate;
+
+            decimal refundAmt = 0;
+            decimal cancelFee = 0;
+            decimal platformFee = 0;
+            decimal penaltyAmt = 0;
+            bool strikeApplied = false;
+
+            if (req.RefundAmount.HasValue && req.CancellationFee.HasValue && req.PlatformCancellationFeeRetained.HasValue)
+            {
+                refundAmt = req.RefundAmount.Value;
+                cancelFee = req.CancellationFee.Value;
+                platformFee = req.PlatformCancellationFeeRetained.Value;
+                penaltyAmt = req.VendorPenaltyAmount ?? 0;
+                strikeApplied = req.VendorStrikeApplied ?? false;
+            }
+            else
+            {
+                int daysUntilEvent = (booking.EventDate.Date - cancelDate.Date).Days;
+                decimal advancePaid = booking.AdvanceAmount;
+                decimal totalAmount = booking.TotalAmount;
+
+                if (req.CancelledBy.ToLower() == "customer")
+                {
+                    if (booking.Status.ToLower() == "pending")
+                    {
+                        refundAmt = 0;
+                        cancelFee = 0;
+                        platformFee = 0;
+                    }
+                    else
+                    {
+                        if (daysUntilEvent > 30)
+                        {
+                            platformFee = Math.Min(Math.Round(totalAmount * 0.02m), 2500m);
+                            refundAmt = Math.Max(0m, advancePaid - platformFee);
+                            cancelFee = 0m;
+                        }
+                        else if (daysUntilEvent >= 15 && daysUntilEvent <= 30)
+                        {
+                            decimal retained = advancePaid * 0.5m;
+                            refundAmt = advancePaid * 0.5m;
+                            platformFee = Math.Min(Math.Round(totalAmount * 0.10m), retained * 0.5m);
+                            cancelFee = Math.Max(0m, retained - platformFee);
+                        }
+                        else if (daysUntilEvent >= 7 && daysUntilEvent < 15)
+                        {
+                            decimal retained = advancePaid * 0.75m;
+                            refundAmt = advancePaid * 0.25m;
+                            platformFee = Math.Min(Math.Round(totalAmount * 0.10m), retained * 0.5m);
+                            cancelFee = Math.Max(0m, retained - platformFee);
+                        }
+                        else
+                        {
+                            decimal retained = advancePaid;
+                            refundAmt = 0m;
+                            platformFee = Math.Min(Math.Round(totalAmount * 0.10m), retained * 0.5m);
+                            cancelFee = Math.Max(0m, retained - platformFee);
+                        }
+                    }
+                }
+                else if (req.CancelledBy.ToLower() == "vendor")
+                {
+                    refundAmt = advancePaid;
+                    cancelFee = 0m;
+                    platformFee = 0m;
+                    penaltyAmt = Math.Min(Math.Round(totalAmount * 0.10m), 15000m);
+                    strikeApplied = true;
+                }
+                else
+                {
+                    refundAmt = advancePaid;
+                    cancelFee = 0m;
+                    platformFee = 0m;
+                }
+            }
+
+            booking.RefundAmount = refundAmt;
+            booking.CancellationFee = cancelFee;
+            booking.PlatformCancellationFeeRetained = platformFee;
+            booking.VendorPenaltyAmount = penaltyAmt;
+            booking.VendorStrikeApplied = strikeApplied;
+            booking.RefundStatus = refundAmt > 0 ? (req.RefundStatus ?? "pending") : "none";
+            booking.RefundTransactionId = req.RefundTransactionId;
+            booking.EscrowStatus = refundAmt > 0 ? "refunded" : "released";
+
             _db.BookingLogs.Add(new BookingLog
             {
                 Id = Guid.NewGuid(),
                 BookingId = bookingId,
-                Message = $"Booking cancelled by {req.CancelledBy}. Reason: {req.Reason}",
+                Message = $"Booking cancelled by {req.CancelledBy}. Reason: {req.Reason}. Refund: ₹{refundAmt}, Fee Retained: ₹{cancelFee + platformFee} (Platform Retained: ₹{platformFee})",
                 Actor = req.CancelledBy,
                 CreatedAt = DateTime.UtcNow
             });
             
+            await _db.SaveChangesAsync();
+            return Ok(new { success = true });
+        }
+
+        [Authorize]
+        [HttpPatch("/api/v1/bookings/{bookingId:guid}/cancellation")]
+        public async Task<IActionResult> UpdateCancellation(Guid bookingId, [FromBody] UpdateCancellationRequest req)
+        {
+            var booking = await _db.Bookings.FindAsync(bookingId);
+            if (booking is null) return NotFound();
+
+            if (req.RefundAmount.HasValue) booking.RefundAmount = req.RefundAmount.Value;
+            if (req.CancellationFee.HasValue) booking.CancellationFee = req.CancellationFee.Value;
+            if (req.PlatformCancellationFeeRetained.HasValue) booking.PlatformCancellationFeeRetained = req.PlatformCancellationFeeRetained.Value;
+            if (!string.IsNullOrEmpty(req.RefundStatus)) booking.RefundStatus = req.RefundStatus;
+            if (req.RefundTransactionId != null) booking.RefundTransactionId = req.RefundTransactionId;
+            if (!string.IsNullOrEmpty(req.EscrowStatus)) booking.EscrowStatus = req.EscrowStatus;
+
+            _db.BookingLogs.Add(new BookingLog
+            {
+                Id = Guid.NewGuid(),
+                BookingId = bookingId,
+                Message = $"Booking cancellation/refund details updated by support. Refund: ₹{booking.RefundAmount}, Fee Retained: ₹{booking.CancellationFee}, Platform Retained: ₹{booking.PlatformCancellationFeeRetained}, Refund Status: {booking.RefundStatus}, Escrow: {booking.EscrowStatus}",
+                Actor = GetUserRole() ?? "Support",
+                CreatedAt = DateTime.UtcNow
+            });
+
             await _db.SaveChangesAsync();
             return Ok(new { success = true });
         }

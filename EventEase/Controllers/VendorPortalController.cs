@@ -8,6 +8,7 @@ using System.Linq;
 using System.Security.Claims;
 using System.IdentityModel.Tokens.Jwt;
 using System.Threading.Tasks;
+using EventEase.Application.Vendors;
 
 namespace EventEase.Api.Controllers
 {
@@ -17,10 +18,12 @@ namespace EventEase.Api.Controllers
     public class VendorPortalController : ControllerBase
     {
         private readonly EventEaseDbContext _db;
+        private readonly IVendorCalendarService _calendarService;
 
-        public VendorPortalController(EventEaseDbContext db)
+        public VendorPortalController(EventEaseDbContext db, IVendorCalendarService calendarService)
         {
             _db = db;
+            _calendarService = calendarService;
         }
 
         private Guid GetUserId()
@@ -271,6 +274,54 @@ namespace EventEase.Api.Controllers
                 offset = $"{offsetTons} Tons",
                 trend
             });
+        }
+
+        // ─── CALENDAR ────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// GET /api/v1/vendor/calendar
+        /// Returns calendar day statuses for the authenticated vendor's business.
+        /// </summary>
+        [HttpGet("calendar")]
+        public async Task<IActionResult> GetCalendar([FromQuery] int? month, [FromQuery] int? year)
+        {
+            var vendorId = await GetVendorId();
+            if (vendorId == Guid.Empty)
+                return NotFound(new { error = "Vendor profile not found" });
+
+            var calendar = await _calendarService.GetCalendarAsync(vendorId, month, year);
+            return Ok(calendar);
+        }
+
+        /// <summary>
+        /// POST /api/v1/vendor/calendar/toggle
+        /// Toggles manual blocking status for a specific date on the vendor's calendar.
+        /// </summary>
+        [HttpPost("calendar/toggle")]
+        public async Task<IActionResult> ToggleCalendarDay([FromBody] Dtos.ToggleBlockedDateRequest req)
+        {
+            var vendorId = await GetVendorId();
+            if (vendorId == Guid.Empty)
+                return NotFound(new { error = "Vendor profile not found" });
+
+            if (!DateTime.TryParse(req.Date, out var date))
+            {
+                return BadRequest(new { error = "Invalid date format. Expected yyyy-MM-dd." });
+            }
+
+            try
+            {
+                var result = await _calendarService.ToggleBlockedDateAsync(vendorId, date, req.Reason);
+                return Ok(result);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = "Failed to toggle date blocking", details = ex.Message });
+            }
         }
     }
 
