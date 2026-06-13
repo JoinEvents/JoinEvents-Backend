@@ -46,5 +46,27 @@ namespace EventEase.Api.Controllers
             await _db.SaveChangesAsync();
             return Ok(review);
         }
+
+        public record FlagReviewRequest(string Reason);
+
+        [Authorize(Policy = "Vendor")]
+        [HttpPost("{id:guid}/flag")]
+        public async Task<IActionResult> FlagReview(Guid id, [FromBody] FlagReviewRequest req)
+        {
+            if (req == null || string.IsNullOrWhiteSpace(req.Reason))
+            {
+                return BadRequest(new { error = "Please provide a reason for the dispute." });
+            }
+
+            var review = await _db.Reviews.FindAsync(id);
+            if (review == null) return NotFound(new { error = "Review not found" });
+
+            review.Status = "flagged";
+            review.DisputeReason = req.Reason;
+
+            _db.Reviews.Update(review);
+            await _db.SaveChangesAsync();
+            return Ok(new { success = true });
+        }
     }
 }

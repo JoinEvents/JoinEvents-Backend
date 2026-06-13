@@ -294,6 +294,90 @@ namespace EventEase.Api.Controllers
         }
 
         /// <summary>
+        /// POST /api/v1/vendor/calendar/bulk-block
+        /// Blocks multiple dates at once on the vendor's calendar.
+        /// </summary>
+        [HttpPost("calendar/bulk-block")]
+        public async Task<IActionResult> BulkBlockDates([FromBody] Dtos.BulkBlockDatesRequest req)
+        {
+            var vendorId = await GetVendorId();
+            if (vendorId == Guid.Empty)
+                return NotFound(new { error = "Vendor profile not found" });
+
+            if (req.Dates == null || !req.Dates.Any())
+            {
+                return BadRequest(new { error = "Dates list cannot be empty." });
+            }
+
+            var parsedDates = new List<DateTime>();
+            foreach (var dateStr in req.Dates)
+            {
+                if (DateTime.TryParse(dateStr, out var d))
+                {
+                    parsedDates.Add(d);
+                }
+                else
+                {
+                    return BadRequest(new { error = $"Invalid date format for: '{dateStr}'" });
+                }
+            }
+
+            try
+            {
+                var result = await _calendarService.BlockDatesAsync(vendorId, parsedDates, req.Reason);
+                return Ok(result);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = "Failed to bulk block dates", details = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// POST /api/v1/vendor/calendar/bulk-release
+        /// Releases multiple dates at once on the vendor's calendar.
+        /// </summary>
+        [HttpPost("calendar/bulk-release")]
+        public async Task<IActionResult> BulkReleaseDates([FromBody] Dtos.BulkReleaseDatesRequest req)
+        {
+            var vendorId = await GetVendorId();
+            if (vendorId == Guid.Empty)
+                return NotFound(new { error = "Vendor profile not found" });
+
+            if (req.Dates == null || !req.Dates.Any())
+            {
+                return BadRequest(new { error = "Dates list cannot be empty." });
+            }
+
+            var parsedDates = new List<DateTime>();
+            foreach (var dateStr in req.Dates)
+            {
+                if (DateTime.TryParse(dateStr, out var d))
+                {
+                    parsedDates.Add(d);
+                }
+                else
+                {
+                    return BadRequest(new { error = $"Invalid date format for: '{dateStr}'" });
+                }
+            }
+
+            try
+            {
+                var result = await _calendarService.ReleaseDatesAsync(vendorId, parsedDates);
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = "Failed to bulk release dates", details = ex.Message });
+            }
+        }
+
+        /// <summary>
         /// POST /api/v1/vendor/calendar/toggle
         /// Toggles manual blocking status for a specific date on the vendor's calendar.
         /// </summary>

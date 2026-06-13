@@ -41,6 +41,14 @@ namespace EventEase.Tests
             var blockedDate = new DateTime(2026, 6, 20, 0, 0, 0, DateTimeKind.Utc);
             var cancelledBookingDate = new DateTime(2026, 6, 25, 0, 0, 0, DateTimeKind.Utc);
 
+            var customerId = Guid.NewGuid();
+            var customer = new User
+            {
+                Id = customerId,
+                Name = "John Doe",
+                Email = "john@example.com"
+            };
+
             var booking = new Booking
             {
                 Id = Guid.NewGuid(),
@@ -50,7 +58,9 @@ namespace EventEase.Tests
                 EventName = "Wedding",
                 City = "Mumbai",
                 Venue = "Grand Hall",
-                UserId = Guid.NewGuid()
+                UserId = customerId,
+                PackageName = "Premium Package",
+                TotalAmount = 50000
             };
 
             var cancelledBooking = new Booking
@@ -74,6 +84,7 @@ namespace EventEase.Tests
                 CreatedAt = DateTime.UtcNow
             };
 
+            _db.Users.Add(customer);
             _db.Bookings.AddRange(booking, cancelledBooking);
             _db.VendorBlockedDates.Add(block);
             await _db.SaveChangesAsync();
@@ -87,6 +98,10 @@ namespace EventEase.Tests
             var bookedDay = calendar.First(d => d.Date == "2026-06-15");
             Assert.Equal("booked", bookedDay.Status);
             Assert.Equal(booking.Id.ToString(), bookedDay.BookingId);
+            Assert.Equal("Wedding", bookedDay.EventName);
+            Assert.Equal("John Doe", bookedDay.CustomerName);
+            Assert.Equal(50000, bookedDay.TotalAmount);
+            Assert.Equal("Premium Package", bookedDay.PackageName);
 
             var blockedDay = calendar.First(d => d.Date == "2026-06-20");
             Assert.Equal("blocked", blockedDay.Status);
@@ -248,6 +263,74 @@ namespace EventEase.Tests
             Assert.False(result[vendor1]);
             Assert.False(result[vendor2]);
             Assert.True(result[vendor3]);
+        }
+
+        [Fact]
+        public async Task BlockDatesAsync_ShouldAddBlocks_WhenNoBookingsExist()
+        {
+            // Arrange
+            var date1 = new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc);
+            var date2 = new DateTime(2026, 7, 2, 0, 0, 0, DateTimeKind.Utc);
+
+            // Act
+            var result = await _service.BlockDatesAsync(_vendorId, new[] { date1, date2 }, "Bulk Block");
+
+            // Assert
+            Assert.Equal(2, result.Count);
+            var blocks = await _db.VendorBlockedDates.Where(b => b.VendorId == _vendorId).ToListAsync();
+            Assert.Equal(2, blocks.Count);
+            Assert.Contains(blocks, b => b.BlockedDate.Date == date1.Date);
+            Assert.Contains(blocks, b => b.BlockedDate.Date == date2.Date);
+        }
+
+        [Fact]
+        public async Task BlockDatesAsync_ShouldThrowException_WhenAnyBookingExists()
+        {
+            // Arrange
+            var date1 = new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc);
+            var date2WithBooking = new DateTime(2026, 7, 2, 0, 0, 0, DateTimeKind.Utc);
+
+            var booking = new Booking
+            {
+                Id = Guid.NewGuid(),
+                VendorId = _vendorId,
+                EventDate = date2WithBooking,
+                Status = "Confirmed",
+                EventName = "Wedding",
+                City = "Mumbai",
+                Venue = "Grand Hall",
+                UserId = Guid.NewGuid()
+            };
+            _db.Bookings.Add(booking);
+            await _db.SaveChangesAsync();
+
+            // Act & Assert
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                _service.BlockDatesAsync(_vendorId, new[] { date1, date2WithBooking }, "Bulk Block"));
+            Assert.Contains("Cannot block dates that already have active bookings", ex.Message);
+        }
+
+        [Fact]
+        public async Task ReleaseDatesAsync_ShouldRemoveBlocks_ForSelectedDates()
+        {
+            // Arrange
+            var date1 = new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc);
+            var date2 = new DateTime(2026, 7, 2, 0, 0, 0, DateTimeKind.Utc);
+
+            var block1 = new VendorBlockedDate { Id = Guid.NewGuid(), VendorId = _vendorId, BlockedDate = date1, CreatedAt = DateTime.UtcNow };
+            var block2 = new VendorBlockedDate { Id = Guid.NewGuid(), VendorId = _vendorId, BlockedDate = date2, CreatedAt = DateTime.UtcNow };
+
+            _db.VendorBlockedDates.AddRange(block1, block2);
+            await _db.SaveChangesAsync();
+
+            // Act
+            var result = await _service.ReleaseDatesAsync(_vendorId, new[] { date1 });
+
+            // Assert
+            Assert.Single(result);
+            var remainingBlocks = await _db.VendorBlockedDates.Where(b => b.VendorId == _vendorId).ToListAsync();
+            Assert.Single(remainingBlocks);
+            Assert.Equal(date2.Date, remainingBlocks[0].BlockedDate.Date);
         }
     }
 }

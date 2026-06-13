@@ -11,5 +11,7 @@ namespace EventEase.Application.Vendors
         Task<CalendarDayDto> ToggleBlockedDateAsync(Guid vendorId, DateTime date, string? reason);
         Task<bool> CheckAvailabilityAsync(Guid vendorId, DateTime date);
         Task<Dictionary<Guid, bool>> CheckBulkAvailabilityAsync(IEnumerable<Guid> vendorIds, DateTime date);
+        Task<List<CalendarDayDto>> BlockDatesAsync(Guid vendorId, IEnumerable<DateTime> dates, string? reason);
+        Task<List<CalendarDayDto>> ReleaseDatesAsync(Guid vendorId, IEnumerable<DateTime> dates);
     }
 }

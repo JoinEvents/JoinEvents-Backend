@@ -13,7 +13,9 @@ namespace EventEase.Application.Vendors
         public record ModerateVendorDto(string Action, string Reason, string Duration);
         public record ReviewDocumentDto(string Status, string RejectionReason);
         public record VendorAnalyticsResponse(decimal TotalEarnings, int ActiveBookings, int PendingBidsCount, object[] MonthlyRevenue, double AverageRating);
-        public record CalendarDayDto(string Date, string Status, string? BookingId = null);
+        public record CalendarDayDto(string Date, string Status, string? BookingId = null, string? EventName = null, string? CustomerName = null, decimal? TotalAmount = null, string? PackageName = null);
         public record ToggleBlockedDateRequest(string Date, string? Reason = null);
+        public record BulkBlockDatesRequest(List<string> Dates, string? Reason = null);
+        public record BulkReleaseDatesRequest(List<string> Dates);
     }
 }

@@ -19,6 +19,7 @@ namespace EventEase.Infrastructure.Data
         public DbSet<Package> Packages { get; set; }
         public DbSet<PackageImage> PackageImages { get; set; }
         public DbSet<Booking> Bookings { get; set; }
+        public DbSet<BookingService> BookingServices { get; set; }
         public DbSet<Review> Reviews { get; set; }
         public DbSet<Payment> Payments { get; set; }
         public DbSet<Chat> Chats { get; set; }
@@ -46,6 +47,15 @@ namespace EventEase.Infrastructure.Data
                 .HasForeignKey(s => s.VendorId);
 
             base.OnModelCreating(modelBuilder);
+
+            modelBuilder.Entity<BookingService>(entity =>
+            {
+                entity.Property(bs => bs.Price).HasPrecision(18, 2);
+                entity.HasOne<Booking>()
+                      .WithMany()
+                      .HasForeignKey(bs => bs.BookingId)
+                      .OnDelete(DeleteBehavior.Cascade);
+            });
 
             modelBuilder.Entity<EventEase.Core.Entities.Booking>()
                 .Property(b => b.Amount)

@@ -41,6 +41,43 @@ namespace EventEase.Api.Controllers
             dto.Id = Guid.NewGuid();
             dto.Status = "Pending";
             _db.Bookings.Add(dto);
+
+            if (dto.PackageId.HasValue)
+            {
+                var package = await _db.Packages.AsNoTracking().FirstOrDefaultAsync(p => p.Id == dto.PackageId.Value);
+                if (package != null && package.Includes != null)
+                {
+                    foreach (var include in package.Includes)
+                    {
+                        _db.BookingServices.Add(new BookingService
+                        {
+                            Id = Guid.NewGuid(),
+                            BookingId = dto.Id,
+                            ServiceName = include,
+                            Category = "Included Service",
+                            Status = "pending",
+                            Price = 0m
+                        });
+                    }
+                }
+            }
+            else
+            {
+                var defaultServices = new List<string> { "Venue Setup", "Catering Service", "Event Decoration" };
+                foreach (var sName in defaultServices)
+                {
+                    _db.BookingServices.Add(new BookingService
+                    {
+                        Id = Guid.NewGuid(),
+                        BookingId = dto.Id,
+                        ServiceName = sName,
+                        Category = "Standard Service",
+                        Status = "pending",
+                        Price = 0m
+                    });
+                }
+            }
+
             await _db.SaveChangesAsync();
             return Ok(dto);
         }
@@ -51,7 +88,7 @@ namespace EventEase.Api.Controllers
             var customerName = user?.Name ?? "Customer";
             var customerPhone = user?.Phone ?? "";
             
-            var vendor = await _db.Vendors.FindAsync(b.VendorId);
+            var vendor = await _db.Vendors.FirstOrDefaultAsync(v => v.Id == b.VendorId || v.UserId == b.VendorId);
             var vendorName = vendor?.BusinessName ?? "Vendor Partner";
             var vendorLocation = vendor?.Location ?? "";
             var vendorDescription = vendor?.Description ?? "";
@@ -62,27 +99,64 @@ namespace EventEase.Api.Controllers
             string mappedStatus = b.Status.ToLower();
             if (mappedStatus == "paid") mappedStatus = "confirmed";
 
-            var services = new List<object>();
-
-            var package = b.PackageId.HasValue 
-                ? await _db.Packages.AsNoTracking().FirstOrDefaultAsync(p => p.Id == b.PackageId.Value) 
-                : null;
-
-            if (package != null && package.Includes != null)
+            var dbServices = await _db.BookingServices.Where(bs => bs.BookingId == b.Id).ToListAsync();
+            if (!dbServices.Any())
             {
-                foreach (var include in package.Includes)
+                var package = b.PackageId.HasValue 
+                    ? await _db.Packages.AsNoTracking().FirstOrDefaultAsync(p => p.Id == b.PackageId.Value) 
+                    : null;
+
+                var listToInsert = new List<BookingService>();
+                if (package != null && package.Includes != null && package.Includes.Any())
                 {
-                    services.Add(new
+                    foreach (var include in package.Includes)
                     {
-                        serviceId = Guid.NewGuid().ToString(),
-                        serviceName = include,
-                        category = "Included Service",
-                        vendorId = b.VendorId.ToString(),
-                        vendorName = vendorName,
-                        price = 0m,
-                        status = "included"
-                    });
+                        listToInsert.Add(new BookingService
+                        {
+                            Id = Guid.NewGuid(),
+                            BookingId = b.Id,
+                            ServiceName = include,
+                            Category = "Included Service",
+                            Status = "pending",
+                            Price = 0m
+                        });
+                    }
                 }
+                else
+                {
+                    var defaultServices = new List<string> { "Venue Setup", "Catering Service", "Event Decoration" };
+                    foreach (var sName in defaultServices)
+                    {
+                        listToInsert.Add(new BookingService
+                        {
+                            Id = Guid.NewGuid(),
+                            BookingId = b.Id,
+                            ServiceName = sName,
+                            Category = "Standard Service",
+                            Status = "pending",
+                            Price = 0m
+                        });
+                    }
+                }
+
+                _db.BookingServices.AddRange(listToInsert);
+                await _db.SaveChangesAsync();
+                dbServices = listToInsert;
+            }
+
+            var services = new List<object>();
+            foreach (var bs in dbServices)
+            {
+                services.Add(new
+                {
+                    serviceId = bs.Id.ToString(),
+                    serviceName = bs.ServiceName,
+                    category = bs.Category,
+                    vendorId = b.VendorId.ToString(),
+                    vendorName = vendorName,
+                    price = bs.Price,
+                    status = bs.Status.ToLower()
+                });
             }
 
             // Fetch review
@@ -92,8 +166,16 @@ namespace EventEase.Api.Controllers
             {
                 reviewInfo = new
                 {
+                    id = review.Id.ToString(),
+                    bookingId = review.BookingId.ToString(),
+                    vendorId = review.VendorId.ToString(),
+                    customerName = review.CustomerName,
+                    eventName = review.EventName,
                     rating = review.Rating,
-                    comment = review.Comment
+                    comment = review.Comment,
+                    date = review.CreatedAt.ToString("yyyy-MM-dd"),
+                    status = review.Status,
+                    disputeReason = review.DisputeReason
                 };
             }
 
@@ -187,12 +269,22 @@ namespace EventEase.Api.Controllers
             var packageIds = bookings.Where(b => b.PackageId.HasValue).Select(b => b.PackageId!.Value).Distinct().ToList();
             var bookingIds = bookings.Select(b => b.Id).ToList();
 
-            var vendors = await _db.Vendors
-                .Where(v => vendorIds.Contains(v.Id))
+            var vendorsList = await _db.Vendors
+                .Where(v => vendorIds.Contains(v.Id) || vendorIds.Contains(v.UserId))
                 .AsNoTracking()
-                .ToDictionaryAsync(v => v.Id);
+                .ToListAsync();
+
+            var vendorsById = vendorsList.ToDictionary(v => v.Id);
+            var vendorsByUserId = new Dictionary<Guid, Vendor>();
+            foreach (var v in vendorsList)
+            {
+                if (v.UserId != Guid.Empty && !vendorsByUserId.ContainsKey(v.UserId))
+                {
+                    vendorsByUserId[v.UserId] = v;
+                }
+            }
  
-            var allUserIds = userIds.Concat(vendors.Values.Select(v => v.UserId)).Distinct().ToList();
+            var allUserIds = userIds.Concat(vendorsList.Select(v => v.UserId)).Distinct().ToList();
             var users = await _db.Users
                 .Where(u => allUserIds.Contains(u.Id))
                 .AsNoTracking()
@@ -221,6 +313,64 @@ namespace EventEase.Api.Controllers
                 .GroupBy(l => l.BookingId)
                 .ToDictionary(g => g.Key, g => g.OrderByDescending(l => l.CreatedAt).First());
 
+            var dbServicesList = await _db.BookingServices
+                .Where(bs => bookingIds.Contains(bs.BookingId))
+                .ToListAsync();
+
+            var dbServicesGrouped = dbServicesList
+                .GroupBy(bs => bs.BookingId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            bool needsSave = false;
+            foreach (var b in bookings)
+            {
+                if (!dbServicesGrouped.TryGetValue(b.Id, out var bServices) || !bServices.Any())
+                {
+                    packages.TryGetValue(b.PackageId ?? Guid.Empty, out var package);
+                    var listToInsert = new List<BookingService>();
+                    if (package != null && package.Includes != null && package.Includes.Any())
+                    {
+                        foreach (var include in package.Includes)
+                        {
+                            listToInsert.Add(new BookingService
+                            {
+                                Id = Guid.NewGuid(),
+                                BookingId = b.Id,
+                                ServiceName = include,
+                                Category = "Included Service",
+                                Status = "pending",
+                                Price = 0m
+                            });
+                        }
+                    }
+                    else
+                    {
+                        var defaultServices = new List<string> { "Venue Setup", "Catering Service", "Event Decoration" };
+                        foreach (var sName in defaultServices)
+                        {
+                            listToInsert.Add(new BookingService
+                            {
+                                Id = Guid.NewGuid(),
+                                BookingId = b.Id,
+                                ServiceName = sName,
+                                Category = "Standard Service",
+                                Status = "pending",
+                                Price = 0m
+                            });
+                        }
+                    }
+
+                    _db.BookingServices.AddRange(listToInsert);
+                    dbServicesGrouped[b.Id] = listToInsert;
+                    needsSave = true;
+                }
+            }
+
+            if (needsSave)
+            {
+                await _db.SaveChangesAsync();
+            }
+
             var result = new List<object>();
             foreach (var b in bookings)
             {
@@ -228,7 +378,11 @@ namespace EventEase.Api.Controllers
                 var customerName = user?.Name ?? "Customer";
                 var customerPhone = user?.Phone ?? "";
 
-                vendors.TryGetValue(b.VendorId, out var vendor);
+                Vendor? vendor = null;
+                if (!vendorsById.TryGetValue(b.VendorId, out vendor))
+                {
+                    vendorsByUserId.TryGetValue(b.VendorId, out vendor);
+                }
                 var vendorName = vendor?.BusinessName ?? "Vendor Partner";
                 var vendorLocation = vendor?.Location ?? "";
                 var vendorDescription = vendor?.Description ?? "";
@@ -245,21 +399,21 @@ namespace EventEase.Api.Controllers
                 if (mappedStatus == "paid") mappedStatus = "confirmed";
 
                 var services = new List<object>();
+                dbServicesGrouped.TryGetValue(b.Id, out var bServices);
 
-                packages.TryGetValue(b.PackageId ?? Guid.Empty, out var package);
-                if (package != null && package.Includes != null)
+                if (bServices != null && bServices.Any())
                 {
-                    foreach (var include in package.Includes)
+                    foreach (var bs in bServices)
                     {
                         services.Add(new
                         {
-                            serviceId = Guid.NewGuid().ToString(),
-                            serviceName = include,
-                            category = "Included Service",
+                            serviceId = bs.Id.ToString(),
+                            serviceName = bs.ServiceName,
+                            category = bs.Category,
                             vendorId = b.VendorId.ToString(),
                             vendorName = vendorName,
-                            price = 0m,
-                            status = "included"
+                            price = bs.Price,
+                            status = bs.Status.ToLower()
                         });
                     }
                 }
@@ -270,8 +424,16 @@ namespace EventEase.Api.Controllers
                 {
                     reviewInfo = new
                     {
+                        id = review.Id.ToString(),
+                        bookingId = review.BookingId.ToString(),
+                        vendorId = review.VendorId.ToString(),
+                        customerName = review.CustomerName,
+                        eventName = review.EventName,
                         rating = review.Rating,
-                        comment = review.Comment
+                        comment = review.Comment,
+                        date = review.CreatedAt.ToString("yyyy-MM-dd"),
+                        status = review.Status,
+                        disputeReason = review.DisputeReason
                     };
                 }
 
@@ -428,7 +590,7 @@ namespace EventEase.Api.Controllers
             }
 
             var bookings = await _db.Bookings
-                .Where(b => b.VendorId == vendor.Id)
+                .Where(b => b.VendorId == vendor.Id || b.VendorId == vendor.UserId)
                 .ToListAsync();
 
             var result = await MapBookingsToDtosAsync(bookings);
@@ -777,6 +939,60 @@ namespace EventEase.Api.Controllers
 
             await _db.SaveChangesAsync();
             return Ok(new { success = true });
+        }
+
+        public record UpdateServiceStatusRequest(string Status);
+
+        [Authorize(Policy = "Vendor")]
+        [HttpPatch("/api/v1/bookings/{bookingId:guid}/services/{serviceId:guid}/status")]
+        public async Task<IActionResult> UpdateServiceStatus(Guid bookingId, Guid serviceId, [FromBody] UpdateServiceStatusRequest req)
+        {
+            if (req == null || string.IsNullOrWhiteSpace(req.Status))
+            {
+                return BadRequest(new { error = "Please provide a valid service status." });
+            }
+
+            var booking = await _db.Bookings.FindAsync(bookingId);
+            if (booking == null) return NotFound(new { error = "Booking not found." });
+
+            var userId = GetUserId();
+            var vendor = await _db.Vendors.FirstOrDefaultAsync(v => v.UserId == userId);
+            if (vendor == null || (booking.VendorId != vendor.Id && booking.VendorId != vendor.UserId))
+            {
+                return StatusCode(403, new { error = "You do not have permission to update services for this booking." });
+            }
+
+            var service = await _db.BookingServices.FirstOrDefaultAsync(bs => bs.Id == serviceId && bs.BookingId == bookingId);
+            if (service == null) return NotFound(new { error = "Service item not found." });
+
+            var oldStatus = service.Status;
+            service.Status = req.Status.ToLower();
+            _db.BookingServices.Update(service);
+
+            _db.BookingLogs.Add(new BookingLog
+            {
+                Id = Guid.NewGuid(),
+                BookingId = bookingId,
+                Message = $"Service '{service.ServiceName}' status updated from '{oldStatus}' to '{service.Status}'.",
+                Actor = "Vendor",
+                CreatedAt = DateTime.UtcNow
+            });
+
+            var customerNotification = new Notification
+            {
+                Id = Guid.NewGuid(),
+                UserId = booking.UserId,
+                Title = "Service Update: " + service.ServiceName,
+                Message = $"The vendor has updated '{service.ServiceName}' to '{service.Status}' for your event '{booking.EventName}'.",
+                Type = "booking",
+                IsRead = false,
+                CreatedAt = DateTime.UtcNow
+            };
+            _db.Notifications.Add(customerNotification);
+
+            await _db.SaveChangesAsync();
+
+            return Ok(new { success = true, serviceId = service.Id, status = service.Status });
         }
     }
 }

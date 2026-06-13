@@ -90,7 +90,7 @@ namespace EventEase.Api.Controllers
             }
             else
             {
-                var packages = await _db.Packages.Where(p => p.VendorId == vendor.Id).ToListAsync();
+                var packages = await _db.Packages.Where(p => p.VendorId == vendor.Id || p.VendorId == vendor.UserId).ToListAsync();
                 if (!packages.Any())
                 {
                     tasks.Add(new { id = "t3", title = "Create Service Package", link = "/vendor/add-service" });

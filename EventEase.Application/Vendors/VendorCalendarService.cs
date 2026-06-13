@@ -25,23 +25,38 @@ namespace EventEase.Application.Vendors
 
             int daysInMonth = DateTime.DaysInMonth(targetYear, targetMonth);
             var startDate = new DateTime(targetYear, targetMonth, 1, 0, 0, 0, DateTimeKind.Utc);
-            var endDate = startDate.AddMonths(1).AddDays(-1);
+            var nextMonthStart = startDate.AddMonths(1);
 
-            // Fetch active bookings in range (excluding Cancelled/Rejected)
-            var bookings = await _db.Bookings
-                .Where(b => b.VendorId == vendorId &&
-                            b.EventDate >= startDate &&
-                            b.EventDate <= endDate &&
-                            b.Status != "Cancelled" &&
-                            b.Status != "Rejected")
-                .AsNoTracking()
-                .ToListAsync();
+            // Get the vendor's associated UserId for matching bookings where VendorId holds the UserId
+            var vendor = await _db.Vendors.AsNoTracking().FirstOrDefaultAsync(v => v.Id == vendorId);
+            var vendorUserId = vendor?.UserId ?? Guid.Empty;
+
+            // Fetch active bookings in range (excluding Cancelled/Rejected) joined with Users
+            var bookings = await (from b in _db.Bookings
+                                  join u in _db.Users on b.UserId equals u.Id into userGroup
+                                  from user in userGroup.DefaultIfEmpty()
+                                  where (b.VendorId == vendorId || b.VendorId == vendorUserId) &&
+                                        b.EventDate >= startDate &&
+                                        b.EventDate < nextMonthStart &&
+                                        b.Status != "Cancelled" &&
+                                        b.Status != "Rejected"
+                                  select new 
+                                  {
+                                      b.Id,
+                                      b.EventDate,
+                                      b.EventName,
+                                      b.PackageName,
+                                      b.TotalAmount,
+                                      CustomerName = user != null ? user.Name : "Anonymous"
+                                  })
+                                 .AsNoTracking()
+                                 .ToListAsync();
 
             // Fetch blocked dates in range
             var blockedDates = await _db.VendorBlockedDates
                 .Where(d => d.VendorId == vendorId &&
                             d.BlockedDate >= startDate &&
-                            d.BlockedDate <= endDate)
+                            d.BlockedDate < nextMonthStart)
                 .AsNoTracking()
                 .ToListAsync();
 
@@ -55,7 +70,15 @@ namespace EventEase.Application.Vendors
                 var booking = bookings.FirstOrDefault(b => b.EventDate.Date == currentDate.Date);
                 if (booking != null)
                 {
-                    result.Add(new CalendarDayDto(dateStr, "booked", booking.Id.ToString()));
+                    result.Add(new CalendarDayDto(
+                        dateStr, 
+                        "booked", 
+                        booking.Id.ToString(), 
+                        booking.EventName, 
+                        booking.CustomerName, 
+                        booking.TotalAmount, 
+                        booking.PackageName
+                    ));
                     continue;
                 }
 
@@ -164,6 +187,73 @@ namespace EventEase.Application.Vendors
             }
 
             return result;
+        }
+
+        public async Task<List<CalendarDayDto>> BlockDatesAsync(Guid vendorId, IEnumerable<DateTime> dates, string? reason)
+        {
+            var targetDates = dates.Select(d => d.Date).Distinct().ToList();
+            if (!targetDates.Any()) return new List<CalendarDayDto>();
+
+            // Check if there are active bookings on any of these dates
+            var bookedDates = await _db.Bookings
+                .Where(b => b.VendorId == vendorId && 
+                            targetDates.Contains(b.EventDate.Date) && 
+                            b.Status != "Cancelled" && 
+                            b.Status != "Rejected")
+                .Select(b => b.EventDate.Date)
+                .Distinct()
+                .ToListAsync();
+
+            if (bookedDates.Any())
+            {
+                var dateStrings = string.Join(", ", bookedDates.Select(d => d.ToString("yyyy-MM-dd")));
+                throw new InvalidOperationException($"Cannot block dates that already have active bookings: {dateStrings}");
+            }
+
+            // Get existing blocks to avoid duplicate insertion
+            var existingBlocks = await _db.VendorBlockedDates
+                .Where(b => b.VendorId == vendorId && targetDates.Contains(b.BlockedDate.Date))
+                .Select(b => b.BlockedDate.Date)
+                .ToListAsync();
+
+            var newBlocks = targetDates
+                .Where(d => !existingBlocks.Contains(d))
+                .Select(d => new VendorBlockedDate
+                {
+                    Id = Guid.NewGuid(),
+                    VendorId = vendorId,
+                    BlockedDate = d,
+                    Reason = reason,
+                    CreatedAt = DateTime.UtcNow
+                })
+                .ToList();
+
+            if (newBlocks.Any())
+            {
+                _db.VendorBlockedDates.AddRange(newBlocks);
+                await _db.SaveChangesAsync();
+            }
+
+            return targetDates.Select(d => new CalendarDayDto(d.ToString("yyyy-MM-dd"), "blocked")).ToList();
+        }
+
+        public async Task<List<CalendarDayDto>> ReleaseDatesAsync(Guid vendorId, IEnumerable<DateTime> dates)
+        {
+            var targetDates = dates.Select(d => d.Date).Distinct().ToList();
+            if (!targetDates.Any()) return new List<CalendarDayDto>();
+
+            // Find existing blocks
+            var blocksToRemove = await _db.VendorBlockedDates
+                .Where(b => b.VendorId == vendorId && targetDates.Contains(b.BlockedDate.Date))
+                .ToListAsync();
+
+            if (blocksToRemove.Any())
+            {
+                _db.VendorBlockedDates.RemoveRange(blocksToRemove);
+                await _db.SaveChangesAsync();
+            }
+
+            return targetDates.Select(d => new CalendarDayDto(d.ToString("yyyy-MM-dd"), "available")).ToList();
         }
     }
 }
