@@ -133,8 +133,8 @@ namespace EventEase.Api.Controllers
                 // Load related data separately
                 var vendors = await _db.Vendors
                     .Where(v => vendorIds.Contains(v.Id))
-                    .Select(v => new { v.Id, v.BusinessName })
-                    .ToDictionaryAsync(v => v.Id, v => v.BusinessName);
+                    .Select(v => new { v.Id, v.BusinessName, v.Description })
+                    .ToDictionaryAsync(v => v.Id, v => new { v.BusinessName, v.Description });
 
                 var images = await _db.PackageImages
                     .Where(i => packageIds.Contains(i.PackageId))
@@ -156,7 +156,8 @@ namespace EventEase.Api.Controllers
                 {
                     Id = $"pkg_{p.Id:N}",
                     VendorId = $"usr_{p.VendorId:N}",
-                    VendorName = vendors.GetValueOrDefault(p.VendorId, ""),
+                    VendorName = vendors.ContainsKey(p.VendorId) ? vendors[p.VendorId].BusinessName : "",
+                    VendorDescription = vendors.ContainsKey(p.VendorId) ? vendors[p.VendorId].Description : "",
                     Category = p.Category,
                     Name = p.Name,
                     Description = p.Description,
@@ -317,7 +318,7 @@ namespace EventEase.Api.Controllers
                 // Look up parent business profiles
                 var vendor = await _db.Vendors
                     .Where(v => v.Id == pData.VendorId)
-                    .Select(v => new { v.Id, v.BusinessName })
+                    .Select(v => new { v.Id, v.BusinessName, v.Description })
                     .FirstOrDefaultAsync();
 
                 var response = new PackageResponse
@@ -325,6 +326,7 @@ namespace EventEase.Api.Controllers
                     Id = $"pkg_{pData.Id:N}",
                     VendorId = $"usr_{pData.VendorId:N}",
                     VendorName = vendor?.BusinessName ?? "",
+                    VendorDescription = vendor?.Description ?? "",
                     Category = pData.Category,
                     Name = pData.Name,
                     Description = pData.Description,

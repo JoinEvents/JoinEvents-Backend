@@ -196,6 +196,8 @@ namespace EventEase.Application.Auth
                 await _db.SaveChangesAsync();
             }
 
+            var vendor = await _db.Vendors.FirstOrDefaultAsync(v => v.UserId == userId);
+
              return new UserProfileDto(
                 user.Id,
                 user.Name,
@@ -212,7 +214,9 @@ namespace EventEase.Application.Auth
                 user.EmailNotifications,
                 user.InAppNotifications,
                 user.SmsNotifications,
-                user.Avatar
+                user.Avatar,
+                vendor?.BusinessName,
+                vendor?.Description
             );
         }
 
@@ -229,6 +233,13 @@ namespace EventEase.Application.Auth
             if (dto.emailNotifications != null) user.EmailNotifications = dto.emailNotifications.Value;
             if (dto.inAppNotifications != null) user.InAppNotifications = dto.inAppNotifications.Value;
             if (dto.smsNotifications != null) user.SmsNotifications = dto.smsNotifications.Value;
+
+            var vendor = await _db.Vendors.FirstOrDefaultAsync(v => v.UserId == userId);
+            if (vendor != null)
+            {
+                if (dto.businessName != null) vendor.BusinessName = dto.businessName;
+                if (dto.description != null) vendor.Description = dto.description;
+            }
 
             await _db.SaveChangesAsync();
 
@@ -248,7 +259,9 @@ namespace EventEase.Application.Auth
                 user.EmailNotifications,
                 user.InAppNotifications,
                 user.SmsNotifications,
-                user.Avatar
+                user.Avatar,
+                vendor?.BusinessName,
+                vendor?.Description
             );
         }
 

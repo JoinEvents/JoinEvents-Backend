@@ -82,6 +82,7 @@ namespace EventEase.Application.PackageManagement
         public string Id { get; set; } = string.Empty;
         public string VendorId { get; set; } = string.Empty;
         public string VendorName { get; set; } = string.Empty;
+        public string VendorDescription { get; set; } = string.Empty;
         public string Category { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;

@@ -45,6 +45,24 @@ namespace EventEase.Api.Controllers
 
             var vendorId = GetUserId();
             
+            var vendor = await _db.Vendors.FirstOrDefaultAsync(v => v.UserId == vendorId);
+            if (vendor == null)
+            {
+                return BadRequest(new { error = "Vendor profile not found. Please complete your business profile." });
+            }
+
+            if (!vendor.IsValidated)
+            {
+                return BadRequest(new { error = "KYC Verification pending. You must complete KYC before creating packages." });
+            }
+
+            if (string.IsNullOrWhiteSpace(vendor.BusinessName) || 
+                vendor.BusinessName.Equals("My Vendor Business", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(vendor.Description))
+            {
+                return BadRequest(new { error = "Incomplete business profile. Please set your Business Name and Description before creating packages." });
+            }
+
             // Extract safely using local variables to prevent NullReferenceException on omitted JSON fields
             var addressDto = request.Address ?? new PackageAddressDto();
             var pricingDto = request.Pricing ?? new PackagePricingDto();
@@ -349,6 +367,24 @@ namespace EventEase.Api.Controllers
 
             if (package.VendorId != vendorId)
                 return StatusCode(403, new { error = "You are not authorized to edit this package" });
+
+            var vendor = await _db.Vendors.FirstOrDefaultAsync(v => v.UserId == vendorId);
+            if (vendor == null)
+            {
+                return BadRequest(new { error = "Vendor profile not found. Please complete your business profile." });
+            }
+
+            if (!vendor.IsValidated)
+            {
+                return BadRequest(new { error = "KYC Verification pending. You must complete KYC before editing packages." });
+            }
+
+            if (string.IsNullOrWhiteSpace(vendor.BusinessName) || 
+                vendor.BusinessName.Equals("My Vendor Business", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(vendor.Description))
+            {
+                return BadRequest(new { error = "Incomplete business profile. Please set your Business Name and Description before editing packages." });
+            }
 
             package.Name = request.Name ?? package.Name;
             package.Category = request.Category ?? package.Category;
