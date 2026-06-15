@@ -36,6 +36,12 @@ namespace EventEase.Api.Controllers
         [HttpGet("threads/{threadId}/messages")]
         public async Task<IActionResult> GetMessages(Guid threadId)
         {
+            // [SECURITY] Verify the current user is a participant in this thread
+            var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub));
+            var threads = await _messengerService.GetThreadsAsync(userId);
+            if (!threads.Any(t => t.ThreadId == threadId.ToString()))
+                return Forbid();
+
             var messages = await _messengerService.GetMessagesAsync(threadId);
             return Ok(messages);
         }

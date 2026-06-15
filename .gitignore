@@ -3,6 +3,14 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
+# [SECURITY] Sensitive files — NEVER commit these
+**/secrets/
+**/gcp-service-account-key.json
+**/appsettings.Development.json
+*.pfx
+*.key
+*.pem
+
 # User-specific files
 *.rsuser
 *.suo

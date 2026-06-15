@@ -1,4 +1,4 @@
-﻿using EventEase.Core.Entities;
+using EventEase.Core.Entities;
 using EventEase.Infrastructure.Data;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -23,15 +23,19 @@ namespace EventEase.Api
             if (context.User.IsInRole("Admin") && context.Request.Method != "GET")
             {
                 var adminId = context.User.FindFirstValue(JwtRegisteredClaimNames.Sub);
-                var log = new AuditLog
+                // [SECURITY] Guard against missing claims to prevent crash
+                if (!string.IsNullOrEmpty(adminId) && Guid.TryParse(adminId, out var parsedAdminId))
                 {
-                    Id = Guid.NewGuid(),
-                    AdminId = Guid.Parse(adminId),
-                    Action = $"{context.Request.Method} {context.Request.Path}",
-                    Target = context.Request.QueryString.ToString()
-                };
-                db.Set<AuditLog>().Add(log);
-                await db.SaveChangesAsync();
+                    var log = new AuditLog
+                    {
+                        Id = Guid.NewGuid(),
+                        AdminId = parsedAdminId,
+                        Action = $"{context.Request.Method} {context.Request.Path}",
+                        Target = context.Request.QueryString.ToString()
+                    };
+                    db.Set<AuditLog>().Add(log);
+                    await db.SaveChangesAsync();
+                }
             }
             await _next(context);
         }

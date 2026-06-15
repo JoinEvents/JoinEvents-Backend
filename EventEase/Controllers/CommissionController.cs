@@ -1,4 +1,5 @@
 using EventEase.Infrastructure.Data;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System;
@@ -10,6 +11,7 @@ namespace EventEase.Api.Controllers
 {
     [ApiController]
     [Route("api/v1/commission")]
+    [Authorize]
     public class CommissionController : ControllerBase
     {
         private readonly EventEaseDbContext _db;

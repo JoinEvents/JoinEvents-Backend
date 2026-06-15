@@ -1,4 +1,4 @@
-﻿using Azure.Core;
+using Azure.Core;
 using EventEase.Application.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -9,7 +9,7 @@ namespace EventEase.Api.Controllers
 {
     [ApiController]
     [Route("services")]
-    // [Authorize(Policy ="Vendor")]
+    [Authorize(Policy ="Vendor")]
     public class ServicesController : ControllerBase
     {
         private readonly IServices _services;

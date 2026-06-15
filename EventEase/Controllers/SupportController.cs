@@ -13,6 +13,7 @@ namespace EventEase.Api.Controllers
 {
     [ApiController]
     [Route("api/v1/support")]
+    [Authorize(Policy = "Admin")]
     public class SupportController : ControllerBase
     {
         private readonly ISupportService _service;

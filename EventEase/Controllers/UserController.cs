@@ -1,8 +1,10 @@
-﻿using EventEase.Application.Blob;
+using EventEase.Application.Blob;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace EventEase.Api.Controllers
 {
+    [Authorize]
     public class UserController : Controller
     {
         private readonly IBlobService _blobService;

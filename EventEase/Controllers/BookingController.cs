@@ -12,6 +12,7 @@ namespace EventEase.Api.Controllers
 {
     [ApiController]
     [Route("api/v1/booking")]
+    [Authorize]
     public class BookingController : ControllerBase
     {
         private readonly EventEaseDbContext _db;
@@ -515,21 +516,25 @@ namespace EventEase.Api.Controllers
         [HttpGet("/api/v1/bookings")]
         public async Task<IActionResult> GetBookings([FromQuery] string? userId)
         {
-            Guid searchUserId = Guid.Empty;
-            if (!string.IsNullOrEmpty(userId) && !Guid.TryParse(userId, out searchUserId))
+            var currentUserId = GetUserId();
+            var currentRole = GetUserRole();
+            Guid searchUserId = currentUserId;
+
+            // [SECURITY] Only Admin/Support/Vendor can query other users' bookings
+            if (!string.IsNullOrEmpty(userId) && Guid.TryParse(userId, out var requestedUserId))
             {
-                searchUserId = GetUserId();
-            }
-            else if (string.IsNullOrEmpty(userId))
-            {
-                searchUserId = GetUserId();
+                if (requestedUserId != currentUserId)
+                {
+                    var isPrivileged = currentRole != null && 
+                        (currentRole.Equals("Admin", StringComparison.OrdinalIgnoreCase) ||
+                         currentRole.Equals("Support", StringComparison.OrdinalIgnoreCase) ||
+                         currentRole.Equals("Vendor", StringComparison.OrdinalIgnoreCase));
+                    if (!isPrivileged) return Forbid();
+                }
+                searchUserId = requestedUserId;
             }
 
-            if (searchUserId == Guid.Empty)
-            {
-                var firstUser = await _db.Users.FirstOrDefaultAsync();
-                if (firstUser != null) searchUserId = firstUser.Id;
-            }
+            if (searchUserId == Guid.Empty) return BadRequest(new { error = "Invalid user ID" });
 
             var bookings = await _db.Bookings
                 .Where(b => b.UserId == searchUserId)
@@ -732,6 +737,15 @@ namespace EventEase.Api.Controllers
         {
             var booking = await _db.Bookings.FindAsync(bookingId);
             if (booking is null) return NotFound();
+
+            // [SECURITY] Verify ownership — only booking owner, vendor, or Admin/Support can update
+            var callerId = GetUserId();
+            var callerRole = GetUserRole();
+            var isPrivileged = callerRole != null && 
+                (callerRole.Equals("Admin", StringComparison.OrdinalIgnoreCase) ||
+                 callerRole.Equals("Support", StringComparison.OrdinalIgnoreCase) ||
+                 callerRole.Equals("Vendor", StringComparison.OrdinalIgnoreCase));
+            if (booking.UserId != callerId && !isPrivileged) return Forbid();
             
             booking.Status = req.Status;
             
@@ -763,6 +777,15 @@ namespace EventEase.Api.Controllers
         {
             var booking = await _db.Bookings.FindAsync(bookingId);
             if (booking is null) return NotFound();
+
+            // [SECURITY] Verify ownership — only booking owner, vendor, or Admin/Support can cancel
+            var callerId = GetUserId();
+            var callerRole = GetUserRole();
+            var isPrivileged = callerRole != null && 
+                (callerRole.Equals("Admin", StringComparison.OrdinalIgnoreCase) ||
+                 callerRole.Equals("Support", StringComparison.OrdinalIgnoreCase) ||
+                 callerRole.Equals("Vendor", StringComparison.OrdinalIgnoreCase));
+            if (booking.UserId != callerId && !isPrivileged) return Forbid();
             
             booking.Status = "Cancelled";
             booking.CancelledBy = req.CancelledBy;
@@ -875,6 +898,11 @@ namespace EventEase.Api.Controllers
             var booking = await _db.Bookings.FindAsync(bookingId);
             if (booking is null) return NotFound();
 
+            // [SECURITY] Only Admin/Support can modify cancellation details
+            var callerRole = GetUserRole();
+            if (callerRole == null || !(callerRole.Equals("Admin", StringComparison.OrdinalIgnoreCase) || callerRole.Equals("Support", StringComparison.OrdinalIgnoreCase)))
+                return Forbid();
+
             if (req.RefundAmount.HasValue) booking.RefundAmount = req.RefundAmount.Value;
             if (req.CancellationFee.HasValue) booking.CancellationFee = req.CancellationFee.Value;
             if (req.PlatformCancellationFeeRetained.HasValue) booking.PlatformCancellationFeeRetained = req.PlatformCancellationFeeRetained.Value;
@@ -901,6 +929,11 @@ namespace EventEase.Api.Controllers
         {
             var booking = await _db.Bookings.FindAsync(bookingId);
             if (booking is null) return NotFound();
+
+            // [SECURITY] Only Vendor can add damage charges
+            var callerRole = GetUserRole();
+            if (callerRole == null || !callerRole.Equals("Vendor", StringComparison.OrdinalIgnoreCase))
+                return Forbid();
             
             booking.DamageCharges = req.Amount;
             booking.DamageChargeNotes = req.Notes;
@@ -925,6 +958,10 @@ namespace EventEase.Api.Controllers
         {
             var booking = await _db.Bookings.FindAsync(bookingId);
             if (booking is null) return NotFound();
+
+            // [SECURITY] Only booking owner can raise a dispute
+            var callerId = GetUserId();
+            if (booking.UserId != callerId) return Forbid();
 
             booking.Status = "Disputed";
             

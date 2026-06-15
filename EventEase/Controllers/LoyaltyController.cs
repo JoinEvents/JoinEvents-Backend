@@ -1,4 +1,5 @@
 using EventEase.Application.Loyalty;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System;
 using System.Threading.Tasks;
@@ -7,6 +8,7 @@ namespace EventEase.Controllers
 {
     [ApiController]
     [Route("api/v1/loyalty")]
+    [Authorize]
     public class LoyaltyController : ControllerBase
     {
         private readonly ILoyaltyService _loyaltyService;
@@ -16,10 +18,21 @@ namespace EventEase.Controllers
             _loyaltyService = loyaltyService;
         }
 
+        private Guid GetUserId()
+        {
+            var val = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value 
+                      ?? User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
+            return Guid.TryParse(val, out var guid) ? guid : Guid.Empty;
+        }
+
         [HttpGet("balance")]
         public async Task<IActionResult> GetBalance([FromQuery] Guid userId)
         {
             if (userId == Guid.Empty) return BadRequest("Invalid user ID");
+
+            // [SECURITY] Verify user can only access their own loyalty data
+            var currentUserId = GetUserId();
+            if (userId != currentUserId) return Forbid();
 
             try
             {
@@ -38,6 +51,10 @@ namespace EventEase.Controllers
         {
             if (userId == Guid.Empty) return BadRequest("Invalid user ID");
 
+            // [SECURITY] Verify user can only access their own loyalty data
+            var currentUserId = GetUserId();
+            if (userId != currentUserId) return Forbid();
+
             try
             {
                 var history = await _loyaltyService.GetHistoryAsync(userId);
@@ -54,6 +71,9 @@ namespace EventEase.Controllers
         {
             if (request == null || request.UserId == Guid.Empty) return BadRequest("Invalid request");
 
+            // [SECURITY] Verify user can only access their own loyalty data
+            if (request.UserId != GetUserId()) return Forbid();
+
             try
             {
                 var response = await _loyaltyService.CalculateDiscountAsync(request);
@@ -69,6 +89,9 @@ namespace EventEase.Controllers
         public async Task<IActionResult> Redeem([FromBody] RedeemRequestDto request)
         {
             if (request == null || request.UserId == Guid.Empty) return BadRequest("Invalid request");
+
+            // [SECURITY] Verify user can only access their own loyalty data
+            if (request.UserId != GetUserId()) return Forbid();
 
             try
             {
@@ -90,6 +113,9 @@ namespace EventEase.Controllers
         {
             if (request == null || request.UserId == Guid.Empty || string.IsNullOrWhiteSpace(request.FriendEmail))
                 return BadRequest("Invalid request");
+
+            // [SECURITY] Verify user can only access their own loyalty data
+            if (request.UserId != GetUserId()) return Forbid();
 
             try
             {
@@ -114,6 +140,9 @@ namespace EventEase.Controllers
         {
             if (request == null || request.UserId == Guid.Empty || request.BookingId == Guid.Empty)
                 return BadRequest("Invalid request");
+
+            // [SECURITY] Verify user can only access their own loyalty data
+            if (request.UserId != GetUserId()) return Forbid();
 
             try
             {

@@ -115,6 +115,23 @@ namespace EventEase.Api.Controllers
                 return BadRequest(new { error = "No image file provided." });
             }
 
+            // [SECURITY] Validate file type and size for avatar uploads
+            var allowedExtensions = new[] { ".jpg", ".jpeg", ".png", ".webp", ".gif" };
+            var ext = Path.GetExtension(file.FileName)?.ToLowerInvariant();
+            if (string.IsNullOrEmpty(ext) || !allowedExtensions.Contains(ext))
+            {
+                return BadRequest(new { error = "Invalid file type. Only JPG, PNG, WebP, and GIF are allowed." });
+            }
+            if (file.Length > 5 * 1024 * 1024) // 5MB max
+            {
+                return BadRequest(new { error = "File size exceeds the 5MB limit." });
+            }
+            var allowedMimeTypes = new[] { "image/jpeg", "image/png", "image/webp", "image/gif" };
+            if (!allowedMimeTypes.Contains(file.ContentType?.ToLowerInvariant()))
+            {
+                return BadRequest(new { error = "Invalid file content type." });
+            }
+
             try
             {
                 var userId = GetUserId();
@@ -132,7 +149,7 @@ namespace EventEase.Api.Controllers
                     System.IO.File.Delete(existingFile);
                 }
 
-                var ext = Path.GetExtension(file.FileName);
+                ext = Path.GetExtension(file.FileName);
                 if (string.IsNullOrEmpty(ext)) ext = ".jpg"; // fallback
 
                 var fileName = $"{userId}{ext}";
@@ -151,7 +168,7 @@ namespace EventEase.Api.Controllers
             catch (Exception ex)
             {
                 Serilog.Log.Error(ex, "Failed to upload avatar");
-                return StatusCode(500, new { error = "Failed to upload avatar", details = ex.Message });
+                return StatusCode(500, new { error = "Failed to upload avatar." });
             }
         }
 

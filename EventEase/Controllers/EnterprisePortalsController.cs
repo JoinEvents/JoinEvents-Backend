@@ -126,7 +126,7 @@ namespace EventEase.Api.Controllers
 
         // --- ADMIN & MODERATION SERVICES ---
 
-        [Authorize]
+        [Authorize(Policy = "Admin")]
         [HttpGet("/api/v1/admin/vendors")]
         public async Task<IActionResult> GetVendors()
         {
@@ -134,7 +134,7 @@ namespace EventEase.Api.Controllers
             return Ok(vendors);
         }
 
-        [Authorize]
+        [Authorize(Policy = "Admin")]
         [HttpPost("/api/v1/admin/vendors/{vendorId:guid}/moderate")]
         public async Task<IActionResult> ModerateVendor(Guid vendorId, [FromBody] ModerateVendorDto dto)
         {
@@ -155,7 +155,7 @@ namespace EventEase.Api.Controllers
             });
         }
 
-        [Authorize]
+        [Authorize(Policy = "Admin")]
         [HttpPut("/api/v1/admin/verification/documents/{docId:guid}")]
         public async Task<IActionResult> ReviewDocument(Guid docId, [FromBody] ReviewDocumentDto dto)
         {

@@ -36,7 +36,13 @@ builder.Host.UseSerilog();
 builder.Services.AddAuthentication("Bearer")
     .AddJwtBearer(options =>
     {
-        var jwtKey = builder.Configuration["Jwt:Key"] ?? "a_very_long_dummy_key_for_startup_purposes_only_12345";
+        // [SECURITY] JWT key must be configured — fail loudly if missing
+        var jwtKey = builder.Configuration["Jwt:Key"];
+        if (string.IsNullOrEmpty(jwtKey) || jwtKey.Contains("dummy"))
+        {
+            jwtKey = Environment.GetEnvironmentVariable("EVENT_EASE_JWT_KEY")
+                     ?? throw new InvalidOperationException("[SECURITY] JWT signing key is not configured. Set 'Jwt:Key' in appsettings or EVENT_EASE_JWT_KEY environment variable.");
+        }
         if (jwtKey.Contains("${"))
         {
             foreach (System.Collections.DictionaryEntry ev in Environment.GetEnvironmentVariables())
@@ -55,7 +61,7 @@ builder.Services.AddAuthentication("Bearer")
         {
             ValidateIssuer = true,
             ValidateAudience = true,
-            ValidateLifetime = false,
+            ValidateLifetime = true, // [SECURITY] Tokens must expire
             ValidateIssuerSigningKey = true,
             ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "EventEase",
             ValidAudience = builder.Configuration["Jwt:Audience"] ?? "EventEase",
@@ -159,14 +165,18 @@ builder.Services.AddControllers()
     });
 
 
+// [SECURITY] Restrict CORS to known frontend origins only
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll",
         policy =>
         {
-            policy.AllowAnyOrigin()
+            var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
+                ?? new[] { "https://joinevents.com", "https://www.joinevents.com", "http://localhost:4200" };
+            policy.WithOrigins(allowedOrigins)
                   .AllowAnyHeader()
-                  .AllowAnyMethod();
+                  .AllowAnyMethod()
+                  .AllowCredentials();
         });
 });
 
@@ -323,6 +333,17 @@ catch (Exception ex)
 }
 
 app.UseCors("AllowAll");
+
+// [SECURITY] Add security headers to all responses
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+    context.Response.Headers.Append("X-Frame-Options", "DENY");
+    context.Response.Headers.Append("X-XSS-Protection", "1; mode=block");
+    context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+    context.Response.Headers.Append("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+    await next();
+});
 app.UseSerilogRequestLogging();
 app.UseStaticFiles();
 
@@ -381,10 +402,8 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 app.UseMiddleware<AuditMiddleware>();
-if (!app.Environment.IsProduction())
-{
-    app.UseHttpsRedirection();
-}
+// [SECURITY] Always enforce HTTPS redirection
+app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 // Health Check
@@ -408,12 +427,11 @@ app.UseExceptionHandler(errorApp =>
 
         context.Response.StatusCode = 500;
         context.Response.ContentType = "application/json";
-        // Ensure CORS is present even on errors
-        context.Response.Headers.Add("Access-Control-Allow-Origin", "*");
 
+        // [SECURITY] Never expose internal exception details to clients
         await context.Response.WriteAsJsonAsync(new {
             error = "Internal Server Error",
-            details = exception?.Message
+            message = "An unexpected error occurred. Please try again later."
         });
     });
 });

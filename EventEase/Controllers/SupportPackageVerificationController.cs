@@ -14,6 +14,7 @@ namespace EventEase.Api.Controllers
 {
     [ApiController]
     [Route("api/v1/support/packages")]
+    [Authorize(Policy = "Admin")]
     public class SupportPackageVerificationController : ControllerBase
     {
         private readonly EventEaseDbContext _db;
