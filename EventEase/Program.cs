@@ -9,6 +9,8 @@ using EventEase.Application.Services;
 using EventEase.Application.Vendors;
 using EventEase.Application.Loyalty;
 using EventEase.Application.Tiers;
+using EventEase.Core.Constants;
+using EventEase.Core.Enums;
 using EventEase.Infrastructure;
 using EventEase.Infrastructure.Data;
 using EventEase.Infrastructure.Otp;
@@ -72,13 +74,14 @@ builder.Services.AddAuthentication("Bearer")
 
 builder.Services.AddAuthorization(options =>
 {
-    options.AddPolicy("User", p => p.RequireAssertion(context => {
+    options.AddPolicy(AuthPolicies.User, p => p.RequireAssertion(context => {
         var claims = context.User.Claims.Select(c => $"{c.Type}={c.Value}").ToList();
         Serilog.Log.Information("[User Policy] Evaluating claims: {Claims}", string.Join(", ", claims));
-        return context.User.HasClaim(c => (c.Type == System.Security.Claims.ClaimTypes.Role || c.Type == "role") && (c.Value.Equals("User", StringComparison.OrdinalIgnoreCase) || c.Value.Equals("Customer", StringComparison.OrdinalIgnoreCase) || c.Value.Equals("Admin", StringComparison.OrdinalIgnoreCase) || c.Value.Equals("Vendor", StringComparison.OrdinalIgnoreCase) || c.Value.Equals("Support", StringComparison.OrdinalIgnoreCase)));
+        return context.User.HasClaim(c => (c.Type == System.Security.Claims.ClaimTypes.Role || c.Type == "role") && (c.Value.Equals(AuthRoles.User, StringComparison.OrdinalIgnoreCase) || c.Value.Equals(AuthRoles.Customer, StringComparison.OrdinalIgnoreCase) || c.Value.Equals(AuthRoles.Admin, StringComparison.OrdinalIgnoreCase) || c.Value.Equals(AuthRoles.Vendor, StringComparison.OrdinalIgnoreCase) || c.Value.Equals(AuthRoles.Support, StringComparison.OrdinalIgnoreCase)));
     }));
-    options.AddPolicy("Vendor", p => p.RequireAssertion(context => context.User.HasClaim(c => (c.Type == System.Security.Claims.ClaimTypes.Role || c.Type == "role") && (c.Value.Equals("Vendor", StringComparison.OrdinalIgnoreCase) || c.Value.Equals("Admin", StringComparison.OrdinalIgnoreCase)))));
-    options.AddPolicy("Admin", p => p.RequireAssertion(context => context.User.HasClaim(c => (c.Type == System.Security.Claims.ClaimTypes.Role || c.Type == "role") && c.Value.Equals("Admin", StringComparison.OrdinalIgnoreCase))));
+    options.AddPolicy(AuthPolicies.Vendor, p => p.RequireAssertion(context => context.User.HasClaim(c => (c.Type == System.Security.Claims.ClaimTypes.Role || c.Type == "role") && (c.Value.Equals(AuthRoles.Vendor, StringComparison.OrdinalIgnoreCase) || c.Value.Equals(AuthRoles.Admin, StringComparison.OrdinalIgnoreCase)))));
+    options.AddPolicy(AuthPolicies.Admin, p => p.RequireAssertion(context => context.User.HasClaim(c => (c.Type == System.Security.Claims.ClaimTypes.Role || c.Type == "role") && c.Value.Equals(AuthRoles.Admin, StringComparison.OrdinalIgnoreCase))));
+    options.AddPolicy(AuthPolicies.SupportOrAdmin, p => p.RequireAssertion(context => context.User.HasClaim(c => (c.Type == System.Security.Claims.ClaimTypes.Role || c.Type == "role") && (c.Value.Equals(AuthRoles.Admin, StringComparison.OrdinalIgnoreCase) || c.Value.Equals(AuthRoles.Support, StringComparison.OrdinalIgnoreCase)))));
 });
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
@@ -324,6 +327,26 @@ try
                 WHERE t.VendorId NOT IN (SELECT Id FROM Users);
             END");
             
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID(N'[dbo].[Packages]') 
+                AND name = 'Pricing_Cuisine'
+            )
+            BEGIN
+                ALTER TABLE [dbo].[Packages] ADD [Pricing_Cuisine] NVARCHAR(200) NULL;
+            END");
+
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns 
+                WHERE object_id = OBJECT_ID(N'[dbo].[Packages]') 
+                AND name = 'Pricing_CuisineType'
+            )
+            BEGIN
+                ALTER TABLE [dbo].[Packages] ADD [Pricing_CuisineType] NVARCHAR(50) NULL;
+            END");
+            
         Console.WriteLine("[Startup DB Schema Check] Package verification status, User notifications, Avatar, AttachmentUrl, BookingId, Priority, and IsInternal columns verified/added successfully.");
     }
 }
@@ -451,3 +474,5 @@ finally
 {
     Log.CloseAndFlush();
 }
+
+public partial class Program { }

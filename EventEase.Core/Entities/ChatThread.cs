@@ -1,4 +1,5 @@
 using System;
+using EventEase.Core.Enums;
 
 namespace EventEase.Core.Entities
 {
@@ -10,7 +11,7 @@ namespace EventEase.Core.Entities
         public Guid VendorId { get; set; }
         public string? LastMessage { get; set; }
         public int UnreadCount { get; set; }
-        public string Status { get; set; } = "Pending"; // Pending, Accepted, Rejected, Active, Closed
+        public string Status { get; set; } = ChatThreadStatus.Pending.ToString(); // Pending, Accepted, Rejected, Active, Closed
         public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     }
 }

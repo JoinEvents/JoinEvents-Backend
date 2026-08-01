@@ -37,6 +37,7 @@ namespace EventEase.Infrastructure.Data
         public DbSet<Tier> Tiers { get; set; }
         public DbSet<TierPriceRange> TierPriceRanges { get; set; }
         public DbSet<VendorBlockedDate> VendorBlockedDates { get; set; }
+        public DbSet<AuditLog> AuditLogs { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

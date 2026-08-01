@@ -155,15 +155,28 @@ namespace EventEase.Application.Vendors
         public async Task<Dictionary<Guid, bool>> CheckBulkAvailabilityAsync(IEnumerable<Guid> vendorIds, DateTime date)
         {
             var targetDate = date.Date;
-            var uniqueVendorIds = vendorIds.Distinct().ToList();
+            var uniqueInputIds = vendorIds.Distinct().ToList();
 
-            if (!uniqueVendorIds.Any())
+            if (!uniqueInputIds.Any())
             {
                 return new Dictionary<Guid, bool>();
             }
 
+            // Map all input IDs to their corresponding Vendor.Id and Vendor.UserId
+            var vendorMap = await _db.Vendors.AsNoTracking()
+                .Where(v => uniqueInputIds.Contains(v.Id) || uniqueInputIds.Contains(v.UserId))
+                .Select(v => new { v.Id, v.UserId })
+                .ToListAsync();
+
+            // We want to query bookings and blocked dates for all resolved Guid IDs
+            var resolvedIds = vendorMap.Select(v => v.Id)
+                .Concat(vendorMap.Select(v => v.UserId))
+                .Concat(uniqueInputIds)
+                .Distinct()
+                .ToList();
+
             var bookedVendors = await _db.Bookings
-                .Where(b => uniqueVendorIds.Contains(b.VendorId) && 
+                .Where(b => resolvedIds.Contains(b.VendorId) && 
                             b.EventDate.Date == targetDate && 
                             b.Status != "Cancelled" && 
                             b.Status != "Rejected")
@@ -172,7 +185,7 @@ namespace EventEase.Application.Vendors
                 .ToListAsync();
 
             var blockedVendors = await _db.VendorBlockedDates
-                .Where(d => uniqueVendorIds.Contains(d.VendorId) && 
+                .Where(d => resolvedIds.Contains(d.VendorId) && 
                             d.BlockedDate.Date == targetDate)
                 .Select(d => d.VendorId)
                 .Distinct()
@@ -180,10 +193,16 @@ namespace EventEase.Application.Vendors
 
             var result = new Dictionary<Guid, bool>();
 
-            foreach (var vendorId in uniqueVendorIds)
+            foreach (var inputId in uniqueInputIds)
             {
-                bool isAvailable = !bookedVendors.Contains(vendorId) && !blockedVendors.Contains(vendorId);
-                result[vendorId] = isAvailable;
+                // Find corresponding vendor records
+                var associatedVendors = vendorMap.Where(v => v.Id == inputId || v.UserId == inputId).ToList();
+                
+                // An input ID is unavailable if there's a booking or block on the input ID itself, or any associated vendor ID/UserId
+                bool hasBooking = bookedVendors.Contains(inputId) || associatedVendors.Any(v => bookedVendors.Contains(v.Id) || bookedVendors.Contains(v.UserId));
+                bool hasBlock = blockedVendors.Contains(inputId) || associatedVendors.Any(v => blockedVendors.Contains(v.Id) || blockedVendors.Contains(v.UserId));
+
+                result[inputId] = !hasBooking && !hasBlock;
             }
 
             return result;

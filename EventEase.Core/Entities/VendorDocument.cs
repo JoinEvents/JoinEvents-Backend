@@ -1,4 +1,5 @@
 using System;
+using EventEase.Core.Enums;
 
 namespace EventEase.Core.Entities
 {
@@ -9,7 +10,7 @@ namespace EventEase.Core.Entities
         public string DocumentType { get; set; } = string.Empty;
         public string FileName { get; set; } = string.Empty;
         public string FileUrl { get; set; } = string.Empty;
-        public string Status { get; set; } = "pending"; // pending, approved, rejected
+        public string Status { get; set; } = VendorDocumentStatus.Pending.ToString().ToLowerInvariant(); // pending, approved, rejected
         public string? RejectionReason { get; set; }
         public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
         public Guid? AuditedBy { get; set; }

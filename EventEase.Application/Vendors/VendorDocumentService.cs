@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using EventEase.Core.Entities;
+using EventEase.Core.Enums;
 using EventEase.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using static EventEase.Application.Vendors.Dtos;
@@ -112,10 +113,10 @@ namespace EventEase.Application.Vendors
             decimal totalEarnings = monthlyEarnings.Sum();
 
             // Booking counts by status
-            var pendingCount = allBookings.Count(b => b.Status == "Pending");
-            var acceptedCount = allBookings.Count(b => b.Status == "Accepted" || b.Status == "Paid");
-            var declinedCount = allBookings.Count(b => b.Status == "Rejected" || b.Status == "Cancelled");
-            var completedCount = allBookings.Count(b => b.Status == "Paid");
+            var pendingCount = allBookings.Count(b => b.Status == BookingStatus.Pending.ToString());
+            var acceptedCount = allBookings.Count(b => b.Status == BookingStatus.Accepted.ToString() || b.Status == BookingStatus.Paid.ToString());
+            var declinedCount = allBookings.Count(b => b.Status == BookingStatus.Rejected.ToString() || b.Status == BookingStatus.Cancelled.ToString());
+            var completedCount = allBookings.Count(b => b.Status == BookingStatus.Paid.ToString());
 
             if (!allBookings.Any())
             {
@@ -193,10 +194,10 @@ namespace EventEase.Application.Vendors
 
             decimal totalEarnings = monthlyEarnings.Sum();
 
-            var pendingCount = allBookings.Any() ? allBookings.Count(b => b.Status == "Pending") : 4;
-            var acceptedCount = allBookings.Any() ? allBookings.Count(b => b.Status == "Accepted" || b.Status == "Paid") : 3;
-            var declinedCount = allBookings.Any() ? allBookings.Count(b => b.Status == "Rejected" || b.Status == "Cancelled") : 1;
-            var completedCount = allBookings.Any() ? allBookings.Count(b => b.Status == "Paid") : 87;
+            var pendingCount = allBookings.Any() ? allBookings.Count(b => b.Status == BookingStatus.Pending.ToString()) : 4;
+            var acceptedCount = allBookings.Any() ? allBookings.Count(b => b.Status == BookingStatus.Accepted.ToString() || b.Status == BookingStatus.Paid.ToString()) : 3;
+            var declinedCount = allBookings.Any() ? allBookings.Count(b => b.Status == BookingStatus.Rejected.ToString() || b.Status == BookingStatus.Cancelled.ToString()) : 1;
+            var completedCount = allBookings.Any() ? allBookings.Count(b => b.Status == BookingStatus.Paid.ToString()) : 87;
 
             var averageRatingTrend = new double[] { 4.5, 4.6, 4.6, 4.7, 4.7, 4.8, 4.8, 4.8, 4.9, 4.8, 4.9, 4.8 };
 

@@ -14,7 +14,7 @@ namespace EventEase.Api.Controllers
 {
     [ApiController]
     [Route("api/v1/support/packages")]
-    [Authorize(Policy = "Admin")]
+    [Authorize(Policy = "SupportOrAdmin")]
     public class SupportPackageVerificationController : ControllerBase
     {
         private readonly EventEaseDbContext _db;
@@ -65,6 +65,8 @@ namespace EventEase.Api.Controllers
                         PricingBasePrice = p.Pricing.BasePrice,
                         PricingRent = p.Pricing.Rent,
                         PricingUnit = p.Pricing.Unit,
+                        PricingCuisine = p.Pricing.Cuisine,
+                        PricingCuisineType = p.Pricing.CuisineType,
                         CapacityMaxGuests = p.Capacity.MaxGuests,
                         CapacityParkingCapacity = p.Capacity.ParkingCapacity,
                         CapacityTotalRooms = p.Capacity.TotalRooms,
@@ -75,7 +77,8 @@ namespace EventEase.Api.Controllers
                         AmenitiesHasAc = p.Amenities.HasAc,
                         AmenitiesHasPowerBackup = p.Amenities.HasPowerBackup,
                         AmenitiesHasChangingRooms = p.Amenities.HasChangingRooms,
-                        AmenitiesHasParking = p.Amenities.HasParking
+                        AmenitiesHasParking = p.Amenities.HasParking,
+                        Includes = p.Includes
                     })
                     .ToListAsync();
 
@@ -141,7 +144,9 @@ namespace EventEase.Api.Controllers
                         RoomPrice = p.PricingRoomPrice,
                         BasePrice = p.PricingBasePrice,
                         Rent = p.PricingRent,
-                        Unit = p.PricingUnit ?? ""
+                        Unit = p.PricingUnit ?? "",
+                        Cuisine = p.PricingCuisine,
+                        CuisineType = p.PricingCuisineType
                     },
                     Capacity = new PackageCapacityDto
                     {
@@ -170,7 +175,7 @@ namespace EventEase.Api.Controllers
                         SeatingCapacity = s.SeatingCapacity,
                         FloatingCapacity = s.FloatingCapacity
                     }).ToList(),
-                    Includes = new List<string>(), // Handled dynamically or simplified
+                    Includes = p.Includes ?? new List<string>(),
                     Images = images.Where(i => i.PackageId == p.Id).Select(i => i.Url).ToList(),
                     Rating = p.Rating,
                     TotalReviews = p.TotalReviews,

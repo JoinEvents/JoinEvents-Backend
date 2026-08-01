@@ -2,13 +2,14 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using EventEase.Application.Tiers;
+using EventEase.Core.Constants;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace EventEase.Api.Controllers
 {
     [ApiController]
-    [Authorize(Policy = "Admin")]
+    [Authorize(Policy = AuthPolicies.Admin)]
     public class AdminTiersController : ControllerBase
     {
         private readonly ITierService _tiers;

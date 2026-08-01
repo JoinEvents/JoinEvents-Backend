@@ -1,4 +1,5 @@
 using System;
+using EventEase.Core.Enums;
 
 namespace EventEase.Core.Entities
 {
@@ -19,7 +20,7 @@ namespace EventEase.Core.Entities
         public decimal BudgetMin { get; set; }
         public decimal BudgetMax { get; set; }
         public string Requirements { get; set; } = string.Empty;
-        public string Status { get; set; } = "open"; // open, bid_selected, closed
+        public string Status { get; set; } = RfpStatus.Open.ToString().ToLowerInvariant(); // open, bid_selected, closed
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime ExpiresAt { get; set; } = DateTime.UtcNow.AddDays(7);
         public string? ServicesNeededJson { get; set; } // list of services needed stored as JSON array

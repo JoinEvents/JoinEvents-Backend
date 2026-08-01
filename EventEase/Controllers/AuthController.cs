@@ -66,6 +66,35 @@ namespace EventEase.Api.Controllers
             return Ok(new { token = tokens.AccessToken, user = new { id = tokens.User.Id.ToString(), name = tokens.User.Name, email = tokens.User.Email, role = tokens.User.Role.ToLower(), avatar = tokens.User.Avatar } });
         }
 
+        [HttpPost("/api/v1/auth/social-login")]
+        public async Task<IActionResult> SocialLogin([FromBody] SocialLoginDto dto)
+        {
+            try
+            {
+                if (dto == null || string.IsNullOrEmpty(dto.token) || string.IsNullOrEmpty(dto.provider))
+                {
+                    return BadRequest(new { error = "Token and provider are required." });
+                }
+
+                var tokens = await _auth.SocialLoginAsync(dto);
+                return Ok(new { 
+                    token = tokens.AccessToken, 
+                    user = new { 
+                        id = tokens.User.Id.ToString(), 
+                        name = tokens.User.Name, 
+                        email = tokens.User.Email, 
+                        role = (tokens.User.Role ?? "Customer").ToLower(),
+                        avatar = tokens.User.Avatar
+                    } 
+                });
+            }
+            catch (Exception ex)
+            {
+                Serilog.Log.Error(ex, "Social login failed with provider {Provider}", dto?.provider);
+                return StatusCode(500, new { error = "Social login failed", details = ex.Message });
+            }
+        }
+
         [Microsoft.AspNetCore.Authorization.Authorize]
         [HttpGet("/api/v1/profile")]
         public async Task<IActionResult> GetProfile()

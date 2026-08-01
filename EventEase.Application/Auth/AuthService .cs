@@ -4,6 +4,8 @@ using EventEase.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using EventEase.Core.Entities;
 using System.Diagnostics;
+using System.Net.Http;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 
@@ -343,6 +345,156 @@ namespace EventEase.Application.Auth
             _db.Users.Remove(user);
             await _db.SaveChangesAsync();
             return true;
+        }
+
+        private record GoogleUserInfoDto(string email, string name, string picture);
+        private record FacebookUserInfoDto(string email, string name, FacebookPictureDto picture);
+        private record FacebookPictureDto(FacebookPictureDataDto data);
+        private record FacebookPictureDataDto(string url);
+        private record SocialProfile(string email, string name, string? avatar);
+
+        private async Task<SocialProfile?> VerifyGoogleTokenAsync(string token)
+        {
+            try
+            {
+                using (var client = new HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("User-Agent", "EventEase-Auth-Service");
+                    var response = await client.GetAsync($"https://www.googleapis.com/oauth2/v3/userinfo?access_token={token}");
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var content = await response.Content.ReadAsStringAsync();
+                        var data = JsonSerializer.Deserialize<GoogleUserInfoDto>(content, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        if (data != null && !string.IsNullOrEmpty(data.email))
+                        {
+                            return new SocialProfile(data.email, data.name, data.picture);
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Google token verification failed. Status code: {response.StatusCode}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Exception verifying Google token: {ex.Message}");
+            }
+            return null;
+        }
+
+        private async Task<SocialProfile?> VerifyFacebookTokenAsync(string token)
+        {
+            try
+            {
+                using (var client = new HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("User-Agent", "EventEase-Auth-Service");
+                    var response = await client.GetAsync($"https://graph.facebook.com/me?fields=id,name,email,picture.type(large)&access_token={token}");
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var content = await response.Content.ReadAsStringAsync();
+                        var data = JsonSerializer.Deserialize<FacebookUserInfoDto>(content, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        if (data != null && !string.IsNullOrEmpty(data.email))
+                        {
+                            return new SocialProfile(data.email, data.name, data.picture?.data?.url);
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Facebook token verification failed. Status code: {response.StatusCode}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Exception verifying Facebook token: {ex.Message}");
+            }
+            return null;
+        }
+
+        public async Task<AuthTokens> SocialLoginAsync(SocialLoginDto dto)
+        {
+            if (string.IsNullOrEmpty(dto.token)) throw new ArgumentException("Token is required");
+            if (string.IsNullOrEmpty(dto.provider)) throw new ArgumentException("Provider is required");
+
+            SocialProfile? profile = null;
+            if (dto.provider.Equals("Google", StringComparison.OrdinalIgnoreCase))
+            {
+                profile = await VerifyGoogleTokenAsync(dto.token);
+            }
+            else if (dto.provider.Equals("Facebook", StringComparison.OrdinalIgnoreCase))
+            {
+                profile = await VerifyFacebookTokenAsync(dto.token);
+            }
+            else
+            {
+                throw new ArgumentException($"Unsupported provider: {dto.provider}");
+            }
+
+            if (profile == null || string.IsNullOrEmpty(profile.email))
+            {
+                throw new InvalidOperationException($"Invalid or expired {dto.provider} token.");
+            }
+
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == profile.email);
+            if (user == null)
+            {
+                // Register new user dynamically using profile pulled from Google/Facebook
+                string generatedCode = Guid.NewGuid().ToString("N").Substring(0, 8).ToUpper();
+                user = new User
+                {
+                    Id = Guid.NewGuid(),
+                    Name = profile.name ?? "Social User",
+                    Email = profile.email,
+                    Phone = string.Empty,
+                    Role = "Customer",
+                    PasswordHash = HashPassword(Guid.NewGuid().ToString("N")),
+                    CreatedAt = DateTime.UtcNow,
+                    ReferralCode = generatedCode,
+                    Avatar = profile.avatar,
+                    City = "Hyderabad",
+                    LoyaltyPoints = 200,
+                    LoyaltyTier = "Gold Member"
+                };
+
+                _db.Users.Add(user);
+                await _db.SaveChangesAsync();
+
+                // Add welcome loyalty points transaction
+                _db.Set<LoyaltyTransaction>().Add(new LoyaltyTransaction 
+                { 
+                    UserId = user.Id, 
+                    Points = 200, 
+                    Type = "earned", 
+                    Description = "Welcome Bonus", 
+                    Date = DateTime.UtcNow 
+                });
+                await _db.SaveChangesAsync();
+            }
+            else
+            {
+                // Update avatar if not set
+                if (string.IsNullOrEmpty(user.Avatar) && !string.IsNullOrEmpty(profile.avatar))
+                {
+                    user.Avatar = profile.avatar;
+                    await _db.SaveChangesAsync();
+                }
+            }
+
+            var access = _tokens.CreateAccessToken(user.Id, user.Role);
+            var (refresh, exp) = _tokens.CreateRefreshToken();
+            _db.Set<RefreshToken>().Add(new RefreshToken 
+            { 
+                Id = Guid.NewGuid(), 
+                UserId = user.Id, 
+                Token = refresh, 
+                ExpiresAt = exp, 
+                Revoked = false 
+            });
+            await _db.SaveChangesAsync();
+
+            return new AuthTokens(access, refresh, exp, user);
         }
 
         /// <summary>

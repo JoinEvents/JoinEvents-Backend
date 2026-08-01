@@ -13,7 +13,7 @@ namespace EventEase.Api.Controllers
 {
     [ApiController]
     [Route("api/v1/support")]
-    [Authorize(Policy = "Admin")]
+    [Authorize]
     public class SupportController : ControllerBase
     {
         private readonly ISupportService _service;
@@ -28,6 +28,7 @@ namespace EventEase.Api.Controllers
         }
 
         // --- Dashboard Stats ---
+        [Authorize(Policy = "SupportOrAdmin")]
         [HttpGet("stats")]
         public async Task<IActionResult> GetDashboardStats()
         {
@@ -66,6 +67,7 @@ namespace EventEase.Api.Controllers
             return Ok(await MapToTicketResponseAsync(ticket, IsAgent()));
         }
 
+        [Authorize(Policy = "SupportOrAdmin")]
         [HttpGet("tickets")]
         public async Task<IActionResult> GetAll()
         {
@@ -112,6 +114,7 @@ namespace EventEase.Api.Controllers
             return Guid.TryParse(val, out var guid) ? guid : Guid.Empty;
         }
 
+        [Authorize(Policy = "SupportOrAdmin")]
         [HttpGet("tickets/{id:guid}")]
         public async Task<IActionResult> GetTicketById(Guid id)
         {
@@ -156,6 +159,7 @@ namespace EventEase.Api.Controllers
             return Ok(await MapToTicketResponseAsync(ticket, IsAgent()));
         }
 
+        [Authorize(Policy = "SupportOrAdmin")]
         [HttpPatch("tickets/{id:guid}/status")]
         public async Task<IActionResult> UpdateStatusPath(Guid id, [FromBody] UpdateTicketDto dto)
         {
@@ -163,6 +167,7 @@ namespace EventEase.Api.Controllers
             return ticket is null ? NotFound() : Ok(await MapToTicketResponseAsync(ticket, IsAgent()));
         }
 
+        [Authorize(Policy = "SupportOrAdmin")]
         [HttpPut("ticket/{id:guid}")]
         public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTicketDto dto)
         {
@@ -400,6 +405,7 @@ namespace EventEase.Api.Controllers
         }
 
         // --- Vendors ---
+        [Authorize(Policy = "SupportOrAdmin")]
         [HttpGet("vendors/pending")]
         public async Task<IActionResult> GetPendingVendors()
         {
@@ -466,6 +472,7 @@ namespace EventEase.Api.Controllers
             public string? Remarks { get; set; }
         }
 
+        [Authorize(Policy = "SupportOrAdmin")]
         [HttpPost("vendors/{id:guid}/verify")]
         public async Task<IActionResult> VerifyVendor(Guid id, [FromBody] VerifyVendorDto dto)
         {
@@ -512,6 +519,7 @@ namespace EventEase.Api.Controllers
         }
 
         // --- Bookings ---
+        [Authorize(Policy = "SupportOrAdmin")]
         [HttpGet("bookings")]
         public async Task<IActionResult> GetBookings()
         {
@@ -665,6 +673,7 @@ namespace EventEase.Api.Controllers
         // --- Booking Notes (real DB) ---
         public class BookingNoteDto { public string Note { get; set; } = ""; }
 
+        [Authorize(Policy = "SupportOrAdmin")]
         [HttpPost("bookings/{id:guid}/note")]
         public async Task<IActionResult> AddBookingNote(Guid id, [FromBody] BookingNoteDto dto)
         {
@@ -688,6 +697,7 @@ namespace EventEase.Api.Controllers
         // --- Notify Customer (real DB) ---
         public class UserUpdateDto { public string Message { get; set; } = ""; }
 
+        [Authorize(Policy = "SupportOrAdmin")]
         [HttpPost("bookings/{id:guid}/user-update")]
         public async Task<IActionResult> UpdateBookingUser(Guid id, [FromBody] UserUpdateDto dto)
         {
@@ -723,6 +733,7 @@ namespace EventEase.Api.Controllers
         // --- Remind Vendor (real DB) ---
         public class VendorReminderDto { public string VendorId { get; set; } = ""; }
 
+        [Authorize(Policy = "SupportOrAdmin")]
         [HttpPost("bookings/{id:guid}/vendor-reminder")]
         public async Task<IActionResult> RemindVendorBooking(Guid id, [FromBody] VendorReminderDto dto)
         {
@@ -766,6 +777,7 @@ namespace EventEase.Api.Controllers
         }
 
         // --- Reviews (real DB) ---
+        [Authorize(Policy = "SupportOrAdmin")]
         [HttpGet("reviews/flagged")]
         public async Task<IActionResult> GetFlaggedReviews()
         {
@@ -818,6 +830,7 @@ namespace EventEase.Api.Controllers
 
         public class ModerateReviewDto { public string Action { get; set; } = "keep"; }
 
+        [Authorize(Policy = "SupportOrAdmin")]
         [HttpPost("reviews/{id:guid}/moderate")]
         public async Task<IActionResult> ModerateReview(Guid id, [FromBody] ModerateReviewDto dto)
         {
@@ -836,6 +849,7 @@ namespace EventEase.Api.Controllers
             }
 
             await _db.SaveChangesAsync();
+            await PackageRatingHelper.RecalculatePackageRating(_db, review.BookingId);
 
             // Notify the review author
             try

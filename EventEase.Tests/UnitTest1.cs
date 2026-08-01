@@ -1,32 +1,46 @@
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.VisualStudio.TestPlatform.TestHost;
 using System.Net.Http.Json;
 using static EventEase.Application.Auth.Dtos;
 
 namespace EventEase.Tests
 {
-    public class AuthIntegrationTests : IClassFixture<WebApplicationFactory<Program>>
+    public class AuthIntegrationTests : IClassFixture<WebApplicationFactory<global::Program>>
     {
         private readonly HttpClient _client;
-        public AuthIntegrationTests(WebApplicationFactory<Program> factory)
+        public AuthIntegrationTests(WebApplicationFactory<global::Program> factory)
         {
             _client = factory.CreateClient();
         }
 
         [Fact]
-        public async Task Register_And_Verify_Should_Return_Tokens()
+        public async Task Register_And_Login_Should_Return_Tokens()
         {
-            var reg = new { name = "Test", phone = "7777777777", email = "t@t.com" };
-            var res = await _client.PostAsJsonAsync("/auth/register", reg);
+            var uniqueEmail = $"test_{Guid.NewGuid()}@test.com";
+            var reg = new { 
+                name = "Test User", 
+                email = uniqueEmail, 
+                password = "Password123!", 
+                phone = "7777777777", 
+                role = "Customer" 
+            };
+            
+            // Register
+            var res = await _client.PostAsJsonAsync("/api/v1/auth/register", reg);
             res.EnsureSuccessStatusCode();
+            var regResult = await res.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+            var token = regResult.GetProperty("token").GetString();
+            Assert.NotNull(token);
 
-            // In dev, OTP is returned in response or logs
-            var verify = new { phone = "7777777777", otp = "123456" };
-            var res2 = await _client.PostAsJsonAsync("/auth/verify", verify);
+            // Login
+            var login = new { 
+                email = uniqueEmail, 
+                password = "Password123!" 
+            };
+            var res2 = await _client.PostAsJsonAsync("/api/v1/auth/login", login);
             res2.EnsureSuccessStatusCode();
-            var tokens = await res2.Content.ReadFromJsonAsync<AuthTokens>();
-            Assert.NotNull(tokens?.AccessToken);
+            var loginResult = await res2.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+            var loginToken = loginResult.GetProperty("token").GetString();
+            Assert.NotNull(loginToken);
         }
     }
-
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using EventEase.Core.Enums;
 
 namespace EventEase.Core.Entities
 {
@@ -62,6 +63,8 @@ namespace EventEase.Core.Entities
         public decimal? BasePrice { get; set; }
         public decimal? Rent { get; set; }
         public string Unit { get; set; } = string.Empty;
+        public string? Cuisine { get; set; }
+        public string? CuisineType { get; set; }
     }
 
     public class PackageCapacity

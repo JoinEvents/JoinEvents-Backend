@@ -1,3 +1,4 @@
+using EventEase.Core.Constants;
 using EventEase.Core.Entities;
 using System;
 using System.Collections.Generic;
@@ -12,6 +13,8 @@ namespace EventEase.Infrastructure.Data
     {
         public static void Seed(EventEaseDbContext db)
         {
+            db.Database.EnsureCreated();
+
             // ── Always ensure admin & support accounts exist ──────────────────
             EnsureAdminUsers(db);
             EnsureTiers(db);
@@ -19,10 +22,10 @@ namespace EventEase.Infrastructure.Data
             // ── Full seed only on empty DB ────────────────────────────────────
             if (db.Users.Count() > 2) return; // vendor + customer already seeded
 
-            var user = new User { Id = Guid.NewGuid(), Name = "Test User", Phone = "9999999999", Email = "user@test.com", Role = "Customer", PasswordHash = Hash("test") };
-            var vendorUser = new User { Id = Guid.NewGuid(), Name = "Vendor User", Phone = "8888888888", Email = "vendor@test.com", Role = "Vendor", PasswordHash = Hash("test") };
-            var AdminUser = new User { Id = Guid.NewGuid(), Name = "Admin User", Phone = "8888888888", Email = "admin@test.com", Role = "Admin", PasswordHash = Hash("test") };
-            var SupportUser = new User { Id = Guid.NewGuid(), Name = "Support User", Phone = "8888888888", Email = "support@test.com", Role = "Support", PasswordHash = Hash("test") };
+            var user = new User { Id = Guid.NewGuid(), Name = "Test User", Phone = "9999999999", Email = "user@test.com", Role = AuthRoles.Customer, PasswordHash = Hash("test") };
+            var vendorUser = new User { Id = Guid.NewGuid(), Name = "Vendor User", Phone = "8888888888", Email = "vendor@test.com", Role = AuthRoles.Vendor, PasswordHash = Hash("test") };
+            var AdminUser = new User { Id = Guid.NewGuid(), Name = "Admin User", Phone = "8888888888", Email = "admin@test.com", Role = AuthRoles.Admin, PasswordHash = Hash("test") };
+            var SupportUser = new User { Id = Guid.NewGuid(), Name = "Support User", Phone = "8888888888", Email = "support@test.com", Role = AuthRoles.Support, PasswordHash = Hash("test") };
             db.Users.AddRange(user, vendorUser, AdminUser, SupportUser);
 
             var vendor = new Vendor { Id = Guid.NewGuid(), UserId = vendorUser.Id, BusinessName = "Dream Weddings", Description = "Full service wedding planner", Location = "Hyderabad", IsValidated = true };
@@ -43,7 +46,6 @@ namespace EventEase.Infrastructure.Data
                 Name = "Wedding Basic",
                 Category = "Wedding",
                 Pricing = new PackagePricing { BasePrice = 100000 },
-                Includes = services.Select(s => s.Name).ToList(),
                 IsActive = true,
                 IsVerified = true
             });
@@ -67,7 +69,7 @@ namespace EventEase.Infrastructure.Data
                     Name = "Priya Nair",
                     Phone = "9988776655",
                     Email = "admin@test.com",
-                    Role = "Admin",
+                    Role = AuthRoles.Admin,
                     PasswordHash = Hash("test")
                 });
                 changed = true;

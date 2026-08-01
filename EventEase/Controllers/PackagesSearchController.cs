@@ -107,6 +107,8 @@ namespace EventEase.Api.Controllers
                         PricingBasePrice = p.Pricing.BasePrice,
                         PricingRent = p.Pricing.Rent,
                         PricingUnit = p.Pricing.Unit,
+                        PricingCuisine = p.Pricing.Cuisine,
+                        PricingCuisineType = p.Pricing.CuisineType,
                         CapacityMaxGuests = p.Capacity.MaxGuests,
                         CapacityParkingCapacity = p.Capacity.ParkingCapacity,
                         CapacityTotalRooms = p.Capacity.TotalRooms,
@@ -181,7 +183,9 @@ namespace EventEase.Api.Controllers
                         RoomPrice = p.PricingRoomPrice,
                         BasePrice = p.PricingBasePrice,
                         Rent = p.PricingRent,
-                        Unit = p.PricingUnit ?? ""
+                        Unit = p.PricingUnit ?? "",
+                        Cuisine = p.PricingCuisine,
+                        CuisineType = p.PricingCuisineType
                     },
                     Capacity = new PackageCapacityDto
                     {
@@ -290,6 +294,8 @@ namespace EventEase.Api.Controllers
                         PricingBasePrice = p.Pricing.BasePrice,
                         PricingRent = p.Pricing.Rent,
                         PricingUnit = p.Pricing.Unit,
+                        PricingCuisine = p.Pricing.Cuisine,
+                        PricingCuisineType = p.Pricing.CuisineType,
                         CapacityMaxGuests = p.Capacity.MaxGuests,
                         CapacityParkingCapacity = p.Capacity.ParkingCapacity,
                         CapacityTotalRooms = p.Capacity.TotalRooms,
@@ -350,7 +356,9 @@ namespace EventEase.Api.Controllers
                         RoomPrice = pData.PricingRoomPrice,
                         BasePrice = pData.PricingBasePrice,
                         Rent = pData.PricingRent,
-                        Unit = pData.PricingUnit ?? ""
+                        Unit = pData.PricingUnit ?? "",
+                        Cuisine = pData.PricingCuisine,
+                        CuisineType = pData.PricingCuisineType
                     },
                     Capacity = new PackageCapacityDto
                     {

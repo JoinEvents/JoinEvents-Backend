@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using EventEase.Core.Entities;
+using EventEase.Core.Enums;
 using EventEase.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using static EventEase.Application.Chat.Dtos;
@@ -177,9 +178,9 @@ namespace EventEase.Application.Chat
             if (!thread.RfpId.HasValue) return thread.Status != "Rejected" && thread.Status != "Closed";
 
             var isBookingComplete = await _db.Bookings
-                .AnyAsync(b => b.RfpId == thread.RfpId && (b.Status == "Paid" || b.Status == "Completed"));
+                .AnyAsync(b => b.RfpId == thread.RfpId && (b.Status == BookingStatus.Paid.ToString() || b.Status == BookingStatus.Completed.ToString()));
 
-            return !isBookingComplete && (thread.Status == "Accepted" || thread.Status == "Active" || thread.Status == "Pending");
+            return !isBookingComplete && (thread.Status == ChatThreadStatus.Accepted.ToString() || thread.Status == ChatThreadStatus.Active.ToString() || thread.Status == ChatThreadStatus.Pending.ToString());
         }
 
         public async Task<List<MessageResponse>> GetMessagesAsync(Guid threadId)
@@ -224,7 +225,7 @@ namespace EventEase.Application.Chat
                     CustomerId = customerId,
                     VendorId = vendorUserId,
                     RfpId = rfpId,
-                    Status = "Pending",
+                    Status = ChatThreadStatus.Pending.ToString(),
                     LastMessage = initialMessage,
                     UpdatedAt = now,
                     UnreadCount = string.IsNullOrEmpty(initialMessage) ? 0 : 1

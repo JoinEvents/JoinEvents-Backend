@@ -43,6 +43,8 @@ namespace EventEase.Application.PackageManagement
         public decimal? BasePrice { get; set; }
         public decimal? Rent { get; set; }
         public string Unit { get; set; } = string.Empty;
+        public string? Cuisine { get; set; }
+        public string? CuisineType { get; set; }
     }
 
     public class PackageCapacityDto

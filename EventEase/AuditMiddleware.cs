@@ -1,4 +1,6 @@
+using EventEase.Core.Constants;
 using EventEase.Core.Entities;
+using EventEase.Core.Enums;
 using EventEase.Infrastructure.Data;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -20,20 +22,30 @@ namespace EventEase.Api
 
         public async Task Invoke(HttpContext context, EventEaseDbContext db)
         {
-            if (context.User.IsInRole("Admin") && context.Request.Method != "GET")
+            if (context.User.IsInRole(AuthRoles.Admin) && context.Request.Method != "GET")
             {
-                var adminId = context.User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+                var adminId = context.User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+                              ?? context.User.FindFirstValue(ClaimTypes.NameIdentifier);
                 // [SECURITY] Guard against missing claims to prevent crash
-                if (!string.IsNullOrEmpty(adminId) && Guid.TryParse(adminId, out var parsedAdminId))
+                if (!string.IsNullOrEmpty(adminId))
                 {
+                    var name = context.User.FindFirstValue(ClaimTypes.Name) ?? "Admin User";
                     var log = new AuditLog
                     {
                         Id = Guid.NewGuid(),
-                        AdminId = parsedAdminId,
+                        Timestamp = DateTime.UtcNow,
+                        ActorId = adminId,
+                        ActorName = name,
+                        ActorRole = AuthRoles.Admin.ToLowerInvariant(),
                         Action = $"{context.Request.Method} {context.Request.Path}",
-                        Target = context.Request.QueryString.ToString()
+                        Description = $"Admin {name} performed {context.Request.Method} action on {context.Request.Path}",
+                        EntityType = "system",
+                        EntityId = context.Request.Path.Value?.Split('/').LastOrDefault() ?? "system",
+                        EntityName = context.Request.Path.Value ?? "System",
+                        Severity = AuditSeverity.Info.ToString().ToLowerInvariant(),
+                        MetadataJson = System.Text.Json.JsonSerializer.Serialize(new { query = context.Request.QueryString.ToString() })
                     };
-                    db.Set<AuditLog>().Add(log);
+                    db.AuditLogs.Add(log);
                     await db.SaveChangesAsync();
                 }
             }

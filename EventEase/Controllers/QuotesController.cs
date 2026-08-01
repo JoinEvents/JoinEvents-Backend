@@ -77,6 +77,14 @@ namespace EventEase.Api.Controllers
                 var vendorName = vendorUser?.Name ?? "Vendor Partner";
                 var businessName = vendor?.BusinessName ?? "Vendor Business";
                 
+                // Fetch actual reviews and ratings from DB
+                var vReviews = vendor != null 
+                    ? await _db.Reviews.Where(r => r.VendorId == vendor.Id && r.Status != "removed").ToListAsync()
+                    : new List<Review>();
+                var avgRating = vReviews.Any() ? Math.Round(vReviews.Average(r => r.Rating), 1) : 4.8;
+                var reviewsCount = vReviews.Count;
+                var isVerified = vendor?.IsValidated ?? false;
+
                 mappedBids.Add(new
                 {
                     id = bid.Id.ToString(),
@@ -84,9 +92,9 @@ namespace EventEase.Api.Controllers
                     vendorId = bid.VendorId.ToString(),
                     vendorName = vendorName,
                     vendorBusinessName = businessName,
-                    vendorRating = 4.8,
-                    vendorReviews = 12,
-                    isVerified = true,
+                    vendorRating = avgRating,
+                    vendorReviews = reviewsCount,
+                    isVerified = isVerified,
                     proposedAmount = bid.ProposedAmount,
                     description = bid.Description,
                     deliverables = System.Text.Json.JsonSerializer.Deserialize<List<string>>(bid.DeliverablesJson ?? "[]") ?? new List<string>(),
@@ -339,6 +347,12 @@ namespace EventEase.Api.Controllers
             var vendorUser = await _db.Users.FindAsync(vendor.UserId);
             var vendorName = vendorUser?.Name ?? "Vendor Partner";
 
+            // Fetch actual reviews and ratings from DB
+            var vReviews = await _db.Reviews.Where(r => r.VendorId == vendor.Id && r.Status != "removed").ToListAsync();
+            var avgRating = vReviews.Any() ? Math.Round(vReviews.Average(r => r.Rating), 1) : 4.8;
+            var reviewsCount = vReviews.Count;
+            var isVerified = vendor.IsValidated;
+
             var dto = new
             {
                 id = bid.Id.ToString(),
@@ -346,9 +360,9 @@ namespace EventEase.Api.Controllers
                 vendorId = bid.VendorId.ToString(),
                 vendorName = vendorName,
                 vendorBusinessName = vendor.BusinessName,
-                vendorRating = 4.8,
-                vendorReviews = 12,
-                isVerified = true,
+                vendorRating = avgRating,
+                vendorReviews = reviewsCount,
+                isVerified = isVerified,
                 proposedAmount = bid.ProposedAmount,
                 description = bid.Description,
                 deliverables = req.Deliverables,

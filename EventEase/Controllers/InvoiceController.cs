@@ -1,3 +1,4 @@
+using EventEase.Core.Constants;
 using EventEase.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -30,7 +31,7 @@ namespace EventEase.Api.Controllers
             return Guid.TryParse(val, out var guid) ? guid : Guid.Empty;
         }
 
-        [Authorize(Policy = "Vendor")]
+        [Authorize(Policy = AuthPolicies.Vendor)]
         [HttpGet("api/v1/vendor/invoices")]
         public async Task<IActionResult> GetVendorInvoices()
         {
@@ -75,7 +76,7 @@ namespace EventEase.Api.Controllers
             return Ok(new { success = true, data = invoices });
         }
 
-        [Authorize(Policy = "Admin")]
+        [Authorize(Policy = AuthPolicies.Admin)]
         [HttpGet("api/v1/admin/invoices")]
         public async Task<IActionResult> GetAdminInvoices()
         {

@@ -8,6 +8,7 @@ using EventEase.Application.Services;
 using EventEase.Application.Vendors;
 using EventEase.Application.Chat;
 using EventEase.Api.Hubs;
+using EventEase.Core.Constants;
 using static EventEase.Application.Services.Dtos;
 using static EventEase.Application.Vendors.Dtos;
 using static EventEase.Application.Chat.Dtos;
@@ -126,7 +127,7 @@ namespace EventEase.Api.Controllers
 
         // --- ADMIN & MODERATION SERVICES ---
 
-        [Authorize(Policy = "Admin")]
+        [Authorize(Policy = AuthPolicies.Admin)]
         [HttpGet("/api/v1/admin/vendors")]
         public async Task<IActionResult> GetVendors()
         {
@@ -134,7 +135,7 @@ namespace EventEase.Api.Controllers
             return Ok(vendors);
         }
 
-        [Authorize(Policy = "Admin")]
+        [Authorize(Policy = AuthPolicies.Admin)]
         [HttpPost("/api/v1/admin/vendors/{vendorId:guid}/moderate")]
         public async Task<IActionResult> ModerateVendor(Guid vendorId, [FromBody] ModerateVendorDto dto)
         {
@@ -155,7 +156,7 @@ namespace EventEase.Api.Controllers
             });
         }
 
-        [Authorize(Policy = "Admin")]
+        [Authorize(Policy = AuthPolicies.Admin)]
         [HttpPut("/api/v1/admin/verification/documents/{docId:guid}")]
         public async Task<IActionResult> ReviewDocument(Guid docId, [FromBody] ReviewDocumentDto dto)
         {

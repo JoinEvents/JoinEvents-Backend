@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using EventEase.Core.Enums;
 
 namespace EventEase.Core.Entities
 {
@@ -13,7 +14,7 @@ namespace EventEase.Core.Entities
         public Guid UserId { get; set; }
         public Guid VendorId { get; set; }
         public DateTime EventDate { get; set; }
-        public string Status { get; set; } = "Pending"; // Pending, Accepted, Rejected, Paid, Cancelled
+        public string Status { get; set; } = BookingStatus.Pending.ToString(); // Pending, Accepted, Rejected, Paid, Cancelled
         public decimal Amount { get; set; }
         public decimal TotalAmount { get; set; } = 0;
         public decimal AdvanceAmount { get; set; } = 0;
@@ -28,7 +29,7 @@ namespace EventEase.Core.Entities
         public decimal CancellationFee { get; set; } = 0;
         public decimal PlatformCancellationFeeRetained { get; set; } = 0;
         public decimal RefundAmount { get; set; } = 0;
-        public string RefundStatus { get; set; } = "none"; // none, pending, processed, failed
+        public string RefundStatus { get; set; } = Enums.RefundStatus.None.ToString().ToLowerInvariant(); // none, pending, processed, failed
         public string? RefundTransactionId { get; set; }
         public decimal VendorPenaltyAmount { get; set; } = 0;
         public bool VendorStrikeApplied { get; set; } = false;
@@ -46,8 +47,8 @@ namespace EventEase.Core.Entities
         public decimal VendorPayoutAmount { get; set; } = 0;
 
         // Escrow and Guarantee fields
-        public string EscrowStatus { get; set; } = "held"; // held, released, refunded
-        public string GuaranteeStatus { get; set; } = "active"; // active, claimed, resolved, expired
+        public string EscrowStatus { get; set; } = Enums.EscrowStatus.Held.ToString().ToLowerInvariant(); // held, released, refunded
+        public string GuaranteeStatus { get; set; } = Enums.GuaranteeStatus.Active.ToString().ToLowerInvariant(); // active, claimed, resolved, expired
         public DateTime? VendorConfirmedAt { get; set; }
         public DateTime? VendorConfirmationDue { get; set; }
     }

@@ -97,9 +97,11 @@ namespace EventEase.Api.Controllers
                     VegPrice = pricingDto.VegPrice,
                     NonVegPrice = pricingDto.NonVegPrice,
                     RoomPrice = pricingDto.RoomPrice,
-                    BasePrice = pricingDto.BasePrice,
+                    BasePrice = CalculateBasePrice(request.Description ?? string.Empty, capacityDto.MaxGuests, pricingDto.BasePrice),
                     Rent = pricingDto.Rent,
-                    Unit = pricingDto.Unit ?? string.Empty
+                    Unit = pricingDto.Unit ?? string.Empty,
+                    Cuisine = pricingDto.Cuisine,
+                    CuisineType = pricingDto.CuisineType
                 },
                 Capacity = new PackageCapacity
                 {
@@ -418,6 +420,8 @@ namespace EventEase.Api.Controllers
                 package.Pricing.BasePrice = request.Pricing.BasePrice ?? package.Pricing.BasePrice;
                 package.Pricing.Rent = request.Pricing.Rent ?? package.Pricing.Rent;
                 package.Pricing.Unit = request.Pricing.Unit ?? package.Pricing.Unit ?? string.Empty;
+                package.Pricing.Cuisine = request.Pricing.Cuisine ?? package.Pricing.Cuisine;
+                package.Pricing.CuisineType = request.Pricing.CuisineType ?? package.Pricing.CuisineType;
             }
 
             if (request.Capacity != null)
@@ -479,6 +483,8 @@ namespace EventEase.Api.Controllers
                     }
                 }
             }
+
+            package.Pricing.BasePrice = CalculateBasePrice(package.Description, package.Capacity?.MaxGuests, package.Pricing?.BasePrice);
 
             package.IsVerified = false;
             package.VerificationStatus = "Pending";
@@ -673,7 +679,9 @@ namespace EventEase.Api.Controllers
                     RoomPrice = p.Pricing?.RoomPrice,
                     BasePrice = p.Pricing?.BasePrice,
                     Rent = p.Pricing?.Rent,
-                    Unit = p.Pricing?.Unit ?? ""
+                    Unit = p.Pricing?.Unit ?? "",
+                    Cuisine = p.Pricing?.Cuisine,
+                    CuisineType = p.Pricing?.CuisineType
                 },
                 Capacity = new PackageCapacityDto
                 {
@@ -715,6 +723,74 @@ namespace EventEase.Api.Controllers
                 CreatedAt = p.CreatedAt,
                 UpdatedAt = p.UpdatedAt
             };
+        }
+
+        private class InclusionDetailCsharp
+        {
+            public string Description { get; set; } = string.Empty;
+            public decimal MinPrice { get; set; }
+            public decimal MaxPrice { get; set; }
+            public List<string> Images { get; set; } = new();
+            public List<string> KeyFeatures { get; set; } = new();
+            public List<string> Inclusions { get; set; } = new();
+        }
+
+        private decimal CalculateBasePrice(string description, int? maxGuests, decimal? fallbackPrice)
+        {
+            if (string.IsNullOrEmpty(description))
+                return fallbackPrice ?? 0;
+
+            var parts = description.Split(new[] { "---INCLUSION_DETAILS---" }, StringSplitOptions.None);
+            if (parts.Length < 2)
+                return fallbackPrice ?? 0;
+
+            var json = parts[1].Trim();
+            if (string.IsNullOrEmpty(json))
+                return fallbackPrice ?? 0;
+
+            try
+            {
+                var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                var details = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, InclusionDetailCsharp>>(json, options);
+                if (details == null || details.Count == 0)
+                    return fallbackPrice ?? 0;
+
+                decimal subtotal = 0;
+                int guests = maxGuests ?? 100;
+                if (guests <= 0) guests = 100;
+
+                foreach (var kvp in details)
+                {
+                    var serviceName = kvp.Key;
+                    var detail = kvp.Value;
+                    decimal servicePrice = detail.MinPrice;
+
+                    if (serviceName.Contains("catering", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (servicePrice < 5000)
+                        {
+                            subtotal += servicePrice * guests;
+                        }
+                        else
+                        {
+                            subtotal += servicePrice;
+                        }
+                    }
+                    else
+                    {
+                        subtotal += servicePrice;
+                    }
+                }
+
+                // Apply 18% GST
+                decimal calculatedBasePrice = subtotal * 1.18m;
+                return Math.Round(calculatedBasePrice, 2);
+            }
+            catch (Exception ex)
+            {
+                Serilog.Log.Error(ex, "Failed to calculate base price from inclusion details");
+                return fallbackPrice ?? 0;
+            }
         }
     }
 }

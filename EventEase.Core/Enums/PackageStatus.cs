@@ -1,4 +1,4 @@
-namespace EventEase.Core.Entities
+namespace EventEase.Core.Enums
 {
     public enum PackageStatus
     {
