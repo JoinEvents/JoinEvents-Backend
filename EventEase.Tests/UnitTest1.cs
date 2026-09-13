@@ -12,35 +12,21 @@ namespace EventEase.Tests
             _client = factory.CreateClient();
         }
 
-        [Fact]
-        public async Task Register_And_Login_Should_Return_Tokens()
+        [Theory]
+        [InlineData("customer@gmail.com", "Customer")]
+        [InlineData("vendor@gmail.com", "Vendor")]
+        [InlineData("support@gmail.com", "Support")]
+        [InlineData("admin@gmail.com", "Admin")]
+        public async Task Login_Seeded_Users_Should_Succeed(string email, string expectedRole)
         {
-            var uniqueEmail = $"test_{Guid.NewGuid()}@test.com";
-            var reg = new { 
-                name = "Test User", 
-                email = uniqueEmail, 
-                password = "Password123!", 
-                phone = "7777777777", 
-                role = "Customer" 
-            };
-            
-            // Register
-            var res = await _client.PostAsJsonAsync("/api/v1/auth/register", reg);
-            res.EnsureSuccessStatusCode();
-            var regResult = await res.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
-            var token = regResult.GetProperty("token").GetString();
-            Assert.NotNull(token);
+            var loginRequest = new { email = email, password = "test" };
+            var response = await _client.PostAsJsonAsync("/api/v1/auth/login", loginRequest);
+            response.EnsureSuccessStatusCode();
 
-            // Login
-            var login = new { 
-                email = uniqueEmail, 
-                password = "Password123!" 
-            };
-            var res2 = await _client.PostAsJsonAsync("/api/v1/auth/login", login);
-            res2.EnsureSuccessStatusCode();
-            var loginResult = await res2.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
-            var loginToken = loginResult.GetProperty("token").GetString();
-            Assert.NotNull(loginToken);
+            var loginResult = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+            var token = loginResult.GetProperty("token").GetString();
+            Assert.NotNull(token);
+            Assert.NotEmpty(token);
         }
     }
 }

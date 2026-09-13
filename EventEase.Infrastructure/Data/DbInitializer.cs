@@ -13,7 +13,7 @@ namespace EventEase.Infrastructure.Data
     {
         public static void Seed(EventEaseDbContext db)
         {
-            db.Database.EnsureCreated();
+            // db.Database.EnsureCreated(); // [EF Core] Schema is already applied by db.Database.Migrate() in Program.cs
 
             // ── Always ensure admin & support accounts exist ──────────────────
             EnsureAdminUsers(db);
@@ -54,12 +54,114 @@ namespace EventEase.Infrastructure.Data
         }
 
         /// <summary>
-        /// Adds admin/support accounts if they don't already exist.
+        /// Adds admin/support/vendor/customer test accounts if they don't already exist.
         /// Safe to call on any existing database.
         /// </summary>
         private static void EnsureAdminUsers(EventEaseDbContext db)
         {
             bool changed = false;
+
+            var admin = db.Users.FirstOrDefault(u => u.Email == "admin@gmail.com");
+            if (admin == null)
+            {
+                db.Users.Add(new User
+                {
+                    Id = Guid.NewGuid(),
+                    Name = "Admin User",
+                    Phone = "9988776655",
+                    Email = "admin@gmail.com",
+                    Role = AuthRoles.Admin,
+                    PasswordHash = Hash("test")
+                });
+                changed = true;
+            }
+            else
+            {
+                admin.PasswordHash = Hash("test");
+                admin.Role = AuthRoles.Admin;
+                changed = true;
+            }
+
+            var support = db.Users.FirstOrDefault(u => u.Email == "support@gmail.com");
+            if (support == null)
+            {
+                db.Users.Add(new User
+                {
+                    Id = Guid.NewGuid(),
+                    Name = "Support User",
+                    Phone = "9900011223",
+                    Email = "support@gmail.com",
+                    Role = AuthRoles.Support,
+                    PasswordHash = Hash("test")
+                });
+                changed = true;
+            }
+            else
+            {
+                support.PasswordHash = Hash("test");
+                support.Role = AuthRoles.Support;
+                changed = true;
+            }
+
+            var customer = db.Users.FirstOrDefault(u => u.Email == "customer@gmail.com");
+            if (customer == null)
+            {
+                db.Users.Add(new User
+                {
+                    Id = Guid.NewGuid(),
+                    Name = "Customer User",
+                    Phone = "9911223344",
+                    Email = "customer@gmail.com",
+                    Role = AuthRoles.Customer,
+                    PasswordHash = Hash("test")
+                });
+                changed = true;
+            }
+            else
+            {
+                customer.PasswordHash = Hash("test");
+                customer.Role = AuthRoles.Customer;
+                changed = true;
+            }
+
+            var vendorUser = db.Users.FirstOrDefault(u => u.Email == "vendor@gmail.com");
+            if (vendorUser == null)
+            {
+                vendorUser = new User
+                {
+                    Id = Guid.NewGuid(),
+                    Name = "Vendor User",
+                    Phone = "8899001122",
+                    Email = "vendor@gmail.com",
+                    Role = AuthRoles.Vendor,
+                    PasswordHash = Hash("test")
+                };
+                db.Users.Add(vendorUser);
+                changed = true;
+            }
+            else
+            {
+                vendorUser.PasswordHash = Hash("test");
+                vendorUser.Role = AuthRoles.Vendor;
+                changed = true;
+            }
+
+            if (changed) db.SaveChanges();
+
+            // Ensure Vendor profile for vendor@gmail.com
+            if (!db.Vendors.Any(v => v.UserId == vendorUser.Id))
+            {
+                db.Vendors.Add(new Vendor
+                {
+                    Id = Guid.NewGuid(),
+                    UserId = vendorUser.Id,
+                    BusinessName = "Premier Event Services",
+                    Description = "Full service event planning & catering vendor",
+                    Location = "Hyderabad",
+                    IsValidated = true
+                });
+                db.SaveChanges();
+            }
 
             if (!db.Users.Any(u => u.Email == "admin@test.com"))
             {
@@ -72,7 +174,7 @@ namespace EventEase.Infrastructure.Data
                     Role = AuthRoles.Admin,
                     PasswordHash = Hash("test")
                 });
-                changed = true;
+                db.SaveChanges();
             }
 
             if (!db.Users.Any(u => u.Email == "support@test.com"))
@@ -86,10 +188,8 @@ namespace EventEase.Infrastructure.Data
                     Role = "Support",
                     PasswordHash = Hash("test")
                 });
-                changed = true;
+                db.SaveChanges();
             }
-
-            if (changed) db.SaveChanges();
         }
 
         private static void EnsureTiers(EventEaseDbContext db)
