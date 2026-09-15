@@ -1,5 +1,8 @@
 using EventEase.Application.Payments;
+using EventEase.Application.Pricing;
+using EventEase.Core.Constants;
 using EventEase.Core.Entities;
+using EventEase.Core.Exceptions;
 using EventEase.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -19,244 +22,174 @@ namespace EventEase.Api.Controllers
         private readonly IPaymentGateway _gateway;
         private readonly ILoyaltyService _loyaltyService;
         private readonly IVendorCalendarService _calendarService;
+        private readonly IBookingPricingService _pricing;
 
-        public BookingController(EventEaseDbContext db, IPaymentGateway gateway, ILoyaltyService loyaltyService, IVendorCalendarService calendarService)
+        public BookingController(
+            EventEaseDbContext db,
+            IPaymentGateway gateway,
+            ILoyaltyService loyaltyService,
+            IVendorCalendarService calendarService,
+            IBookingPricingService pricing)
         {
             _db = db;
             _gateway = gateway;
             _loyaltyService = loyaltyService;
             _calendarService = calendarService;
+            _pricing = pricing;
         }
 
-        [Authorize(Policy = "User")]
+        /// <summary>
+        /// Request to create a booking. Deliberately carries no monetary fields — every amount is
+        /// computed server-side from the vendor's catalogue, and the owner is taken from the token.
+        /// </summary>
+        public record CreateBookingRequest(
+            Guid VendorId,
+            DateTime EventDate,
+            Guid? PackageId,
+            List<Guid>? ServiceIds,
+            string? MealPreference,
+            string? EventName,
+            string? Venue,
+            string? City,
+            int GuestCount,
+            Guid? RfpId);
+
+        [Authorize(Policy = AuthPolicies.User)]
         [HttpPost]
-        public async Task<IActionResult> Create([FromBody] Booking dto)
+        public async Task<IActionResult> Create([FromBody] CreateBookingRequest req)
         {
-            // Verify vendor availability before creating the booking
-            var isAvailable = await _calendarService.CheckAvailabilityAsync(dto.VendorId, dto.EventDate);
+            if (req is null) return BadRequest(new { error = "A booking request is required." });
+            if (req.VendorId == Guid.Empty) return BadRequest(new { error = "A vendor must be selected." });
+            if (req.EventDate.Date < DateTime.UtcNow.Date)
+                return BadRequest(new { error = "The event date cannot be in the past." });
+
+            var userId = GetUserId();
+            if (userId == Guid.Empty) return Unauthorized(new { error = "Invalid token." });
+
+            BookingPriceResult price;
+            try
+            {
+                price = await _pricing.PriceAsync(new BookingPriceRequest(
+                    req.VendorId, req.PackageId, req.GuestCount, req.ServiceIds, req.MealPreference));
+            }
+            catch (BusinessRuleException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+
+            var isAvailable = await _calendarService.CheckAvailabilityAsync(req.VendorId, req.EventDate);
             if (!isAvailable)
             {
                 return BadRequest(new { error = "The vendor is already booked or has blocked the selected date." });
             }
 
-            dto.Id = Guid.NewGuid();
-            dto.Status = "Pending";
-            _db.Bookings.Add(dto);
-
-            if (dto.PackageId.HasValue)
+            var booking = new Booking
             {
-                var package = await _db.Packages.AsNoTracking().FirstOrDefaultAsync(p => p.Id == dto.PackageId.Value);
-                if (package != null && package.Includes != null)
-                {
-                    foreach (var include in package.Includes)
-                    {
-                        _db.BookingServices.Add(new BookingService
-                        {
-                            Id = Guid.NewGuid(),
-                            BookingId = dto.Id,
-                            ServiceName = include,
-                            Category = "Included Service",
-                            Status = "pending",
-                            Price = 0m
-                        });
-                    }
-                }
-            }
-            else
-            {
-                var defaultServices = new List<string> { "Venue Setup", "Catering Service", "Event Decoration" };
-                foreach (var sName in defaultServices)
-                {
-                    _db.BookingServices.Add(new BookingService
-                    {
-                        Id = Guid.NewGuid(),
-                        BookingId = dto.Id,
-                        ServiceName = sName,
-                        Category = "Standard Service",
-                        Status = "pending",
-                        Price = 0m
-                    });
-                }
-            }
+                Id = Guid.NewGuid(),
+                UserId = userId,
+                VendorId = req.VendorId,
+                RfpId = req.RfpId,
+                EventDate = req.EventDate,
+                Status = BookingStatuses.Pending,
+                GuestCount = req.GuestCount,
+                PackageId = req.PackageId,
+                PackageName = price.PackageName,
+                EventName = string.IsNullOrWhiteSpace(req.EventName) ? "Event Celebration" : req.EventName.Trim(),
+                Venue = string.IsNullOrWhiteSpace(req.Venue) ? "Hotel Banquet" : req.Venue.Trim(),
+                City = string.IsNullOrWhiteSpace(req.City) ? "Mumbai" : req.City.Trim(),
 
-            await _db.SaveChangesAsync();
-            return Ok(dto);
-        }
-
-        private async Task<object> MapBookingToDto(Booking b)
-        {
-            var user = await _db.Users.FindAsync(b.UserId);
-            var customerName = user?.Name ?? "Customer";
-            var customerPhone = user?.Phone ?? "";
-            
-            var vendor = await _db.Vendors.FirstOrDefaultAsync(v => v.Id == b.VendorId || v.UserId == b.VendorId);
-            var vendorName = vendor?.BusinessName ?? "Vendor Partner";
-            var vendorLocation = vendor?.Location ?? "";
-            var vendorDescription = vendor?.Description ?? "";
-            var vendorUser = vendor != null ? await _db.Users.FindAsync(vendor.UserId) : null;
-            var vendorPhone = vendorUser?.Phone ?? "";
-            var vendorEmail = vendorUser?.Email ?? "";
-
-            string mappedStatus = b.Status.ToLower();
-            if (mappedStatus == "paid") mappedStatus = "confirmed";
-
-            var dbServices = await _db.BookingServices.Where(bs => bs.BookingId == b.Id).ToListAsync();
-            if (!dbServices.Any())
-            {
-                var package = b.PackageId.HasValue 
-                    ? await _db.Packages.AsNoTracking().FirstOrDefaultAsync(p => p.Id == b.PackageId.Value) 
-                    : null;
-
-                var listToInsert = new List<BookingService>();
-                if (package != null && package.Includes != null && package.Includes.Any())
-                {
-                    foreach (var include in package.Includes)
-                    {
-                        listToInsert.Add(new BookingService
-                        {
-                            Id = Guid.NewGuid(),
-                            BookingId = b.Id,
-                            ServiceName = include,
-                            Category = "Included Service",
-                            Status = "pending",
-                            Price = 0m
-                        });
-                    }
-                }
-                else
-                {
-                    var defaultServices = new List<string> { "Venue Setup", "Catering Service", "Event Decoration" };
-                    foreach (var sName in defaultServices)
-                    {
-                        listToInsert.Add(new BookingService
-                        {
-                            Id = Guid.NewGuid(),
-                            BookingId = b.Id,
-                            ServiceName = sName,
-                            Category = "Standard Service",
-                            Status = "pending",
-                            Price = 0m
-                        });
-                    }
-                }
-
-                _db.BookingServices.AddRange(listToInsert);
-                await _db.SaveChangesAsync();
-                dbServices = listToInsert;
-            }
-
-            var services = new List<object>();
-            foreach (var bs in dbServices)
-            {
-                services.Add(new
-                {
-                    serviceId = bs.Id.ToString(),
-                    serviceName = bs.ServiceName,
-                    category = bs.Category,
-                    vendorId = b.VendorId.ToString(),
-                    vendorName = vendorName,
-                    price = bs.Price,
-                    status = bs.Status.ToLower()
-                });
-            }
-
-            // Fetch review
-            var review = await _db.Reviews.FirstOrDefaultAsync(r => r.BookingId == b.Id && r.Status != "removed");
-            object? reviewInfo = null;
-            if (review != null)
-            {
-                reviewInfo = new
-                {
-                    id = review.Id.ToString(),
-                    bookingId = review.BookingId.ToString(),
-                    vendorId = review.VendorId.ToString(),
-                    customerName = review.CustomerName,
-                    eventName = review.EventName,
-                    rating = review.Rating,
-                    comment = review.Comment,
-                    date = review.CreatedAt.ToString("yyyy-MM-dd"),
-                    status = review.Status,
-                    disputeReason = review.DisputeReason
-                };
-            }
-
-            // Fetch dispute info
-            object? disputeInfo = null;
-            if (mappedStatus == "disputed")
-            {
-                var disputeLog = await _db.BookingLogs
-                    .Where(l => l.BookingId == b.Id && l.Message.StartsWith("Dispute raised. Reason:"))
-                    .OrderByDescending(l => l.CreatedAt)
-                    .FirstOrDefaultAsync();
-
-                var reason = disputeLog != null 
-                    ? disputeLog.Message.Substring("Dispute raised. Reason:".Length).Trim()
-                    : "Dispute raised.";
-
-                disputeInfo = new
-                {
-                    reason = reason,
-                    status = "open"
-                };
-            }
-
-            // Map eventTypeId
-            string eventTypeId = "wedding";
-            var nameLower = (b.EventName ?? "").ToLower();
-            if (nameLower.Contains("birthday")) eventTypeId = "birthday";
-            else if (nameLower.Contains("corporate")) eventTypeId = "corporate";
-            else if (nameLower.Contains("beauty")) eventTypeId = "beauty";
-            else if (nameLower.Contains("travel")) eventTypeId = "travel";
-            else if (nameLower.Contains("shopping")) eventTypeId = "shopping";
-
-            return new
-            {
-                id = b.Id.ToString(),
-                bookingNumber = $"BK-{b.Id.ToString().Substring(0, 8).ToUpper()}",
-                customerId = b.UserId.ToString(),
-                customerName = customerName,
-                customerPhone = customerPhone,
-                vendorId = b.VendorId.ToString(),
-                vendorName = vendorName,
-                vendorPhone = vendorPhone,
-                vendorEmail = vendorEmail,
-                vendorLocation = vendorLocation,
-                vendorDescription = vendorDescription,
-                eventTypeId = eventTypeId,
-                eventName = b.EventName,
-                packageId = b.PackageId?.ToString(),
-                packageName = b.PackageName,
-                eventDate = b.EventDate.ToString("yyyy-MM-dd"),
-                venue = b.Venue,
-                city = b.City,
-                guestCount = b.GuestCount,
-                status = mappedStatus,
-                advanceAmount = b.AdvanceAmount,
-                baseAmount = Math.Round((b.TotalAmount - b.DamageCharges) / 1.18m, 2),
-                extraServicesAmount = b.ExtraServicesAmount,
-                damageCharges = b.DamageCharges,
-                damageChargeNotes = b.DamageChargeNotes,
-                isDamageChargeApproved = b.IsDamageChargeApproved,
-                gstPercent = 18,
-                totalAmount = b.TotalAmount,
-                finalPaidAmount = b.FinalPaidAmount,
-                cancelledBy = b.CancelledBy,
-                cancellationReason = b.CancellationReason,
-                cancellationDate = b.CancellationDate?.ToString("yyyy-MM-dd"),
-                cancellationFee = b.CancellationFee,
-                platformCancellationFeeRetained = b.PlatformCancellationFeeRetained,
-                refundAmount = b.RefundAmount,
-                refundStatus = b.RefundStatus,
-                refundTransactionId = b.RefundTransactionId,
-                vendorPenaltyAmount = b.VendorPenaltyAmount,
-                vendorStrikeApplied = b.VendorStrikeApplied,
-                escrowStatus = b.EscrowStatus.ToLower(),
-                disputeInfo = disputeInfo,
-                review = reviewInfo,
-                services = services,
-                createdAt = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm")
+                // [SECURITY] Server-computed amounts only.
+                Amount = price.AdvanceAmount,
+                TotalAmount = price.TotalAmount,
+                AdvanceAmount = price.AdvanceAmount,
+                PlatformFeeRate = price.PlatformFeeRate,
+                PlatformFeeAmount = price.PlatformFeeAmount,
+                VendorPayoutAmount = price.VendorPayoutAmount
             };
+
+            // The availability check above and the insert below must not be split by a competing
+            // booking, so they are committed together and the unique index on
+            // (VendorId, EventDate) in VendorBlockedDates backstops the race.
+            await using var tx = await _db.Database.BeginTransactionAsync();
+            try
+            {
+                _db.Bookings.Add(booking);
+                _db.BookingServices.AddRange(BuildBookingServices(booking.Id, price.Lines));
+
+                _db.BookingLogs.Add(new BookingLog
+                {
+                    Id = Guid.NewGuid(),
+                    BookingId = booking.Id,
+                    Message = $"Booking created for {price.TotalAmount:0.00} (advance {price.AdvanceAmount:0.00}).",
+                    Actor = "Customer",
+                    CreatedAt = DateTime.UtcNow
+                });
+
+                await _db.SaveChangesAsync();
+                await tx.CommitAsync();
+            }
+            catch (DbUpdateException)
+            {
+                await tx.RollbackAsync();
+                return Conflict(new { error = "That date was just taken. Please choose another date." });
+            }
+
+            return Ok(await MapBookingsToDtosAsync(new List<Booking> { booking }));
         }
+
+        /// <summary>
+        /// Turns the priced line items into the booking's service checklist.
+        /// </summary>
+        private static List<BookingService> BuildBookingServices(Guid bookingId, IReadOnlyList<BookingPriceLine> lines)
+        {
+            return lines.Select(line => new BookingService
+            {
+                Id = Guid.NewGuid(),
+                BookingId = bookingId,
+                ServiceName = line.Description,
+                Category = "Booked Service",
+                Status = "pending",
+                Price = line.Amount
+            }).ToList();
+        }
+
+        /// <summary>
+        /// True when the caller owns the booking, is the vendor fulfilling it, or is staff.
+        ///
+        /// Vendor identity is checked against this specific booking: holding the Vendor role is
+        /// not on its own permission to touch someone else's booking.
+        /// </summary>
+        private async Task<bool> CanAccessBookingAsync(Booking booking)
+        {
+            var callerId = GetUserId();
+            if (callerId == Guid.Empty) return false;
+            if (booking.UserId == callerId) return true;
+
+            var role = GetUserRole();
+            if (IsStaff(role)) return true;
+
+            if (string.Equals(role, AuthRoles.Vendor, StringComparison.OrdinalIgnoreCase))
+            {
+                return await IsBookingVendorAsync(booking, callerId);
+            }
+
+            return false;
+        }
+
+        /// <summary>True when the caller is the vendor assigned to this booking.</summary>
+        private async Task<bool> IsBookingVendorAsync(Booking booking, Guid callerId)
+        {
+            var vendor = await _db.Vendors.AsNoTracking().FirstOrDefaultAsync(v => v.UserId == callerId);
+            if (vendor is null) return false;
+
+            // Legacy rows store either the Vendor row id or the vendor's user id in VendorId.
+            return booking.VendorId == vendor.Id || booking.VendorId == vendor.UserId;
+        }
+
+        private static bool IsStaff(string? role) =>
+            role is not null &&
+            (role.Equals(AuthRoles.Admin, StringComparison.OrdinalIgnoreCase) ||
+             role.Equals(AuthRoles.Support, StringComparison.OrdinalIgnoreCase));
 
         private async Task<List<object>> MapBookingsToDtosAsync(List<Booking> bookings)
         {
@@ -267,7 +200,6 @@ namespace EventEase.Api.Controllers
 
             var userIds = bookings.Select(b => b.UserId).Distinct().ToList();
             var vendorIds = bookings.Select(b => b.VendorId).Distinct().ToList();
-            var packageIds = bookings.Where(b => b.PackageId.HasValue).Select(b => b.PackageId!.Value).Distinct().ToList();
             var bookingIds = bookings.Select(b => b.Id).ToList();
 
             var vendorsList = await _db.Vendors
@@ -290,11 +222,6 @@ namespace EventEase.Api.Controllers
                 .Where(u => allUserIds.Contains(u.Id))
                 .AsNoTracking()
                 .ToDictionaryAsync(u => u.Id);
-
-            var packages = await _db.Packages
-                .Where(p => packageIds.Contains(p.Id))
-                .AsNoTracking()
-                .ToDictionaryAsync(p => p.Id);
 
             var reviewsList = await _db.Reviews
                 .Where(r => bookingIds.Contains(r.BookingId) && r.Status != "removed")
@@ -322,55 +249,10 @@ namespace EventEase.Api.Controllers
                 .GroupBy(bs => bs.BookingId)
                 .ToDictionary(g => g.Key, g => g.ToList());
 
-            bool needsSave = false;
-            foreach (var b in bookings)
-            {
-                if (!dbServicesGrouped.TryGetValue(b.Id, out var bServices) || !bServices.Any())
-                {
-                    packages.TryGetValue(b.PackageId ?? Guid.Empty, out var package);
-                    var listToInsert = new List<BookingService>();
-                    if (package != null && package.Includes != null && package.Includes.Any())
-                    {
-                        foreach (var include in package.Includes)
-                        {
-                            listToInsert.Add(new BookingService
-                            {
-                                Id = Guid.NewGuid(),
-                                BookingId = b.Id,
-                                ServiceName = include,
-                                Category = "Included Service",
-                                Status = "pending",
-                                Price = 0m
-                            });
-                        }
-                    }
-                    else
-                    {
-                        var defaultServices = new List<string> { "Venue Setup", "Catering Service", "Event Decoration" };
-                        foreach (var sName in defaultServices)
-                        {
-                            listToInsert.Add(new BookingService
-                            {
-                                Id = Guid.NewGuid(),
-                                BookingId = b.Id,
-                                ServiceName = sName,
-                                Category = "Standard Service",
-                                Status = "pending",
-                                Price = 0m
-                            });
-                        }
-                    }
-
-                    _db.BookingServices.AddRange(listToInsert);
-                    dbServicesGrouped[b.Id] = listToInsert;
-                    needsSave = true;
-                }
-            }
-
-            if (needsSave)
-            {
-                await _db.SaveChangesAsync();
-            }
+            // A read no longer writes. This previously inserted placeholder BookingServices rows
+            // (and called SaveChangesAsync) while mapping a GET response, which made listing
+            // bookings mutate them. Bookings created before the service checklist existed simply
+            // report an empty list.
 
             var result = new List<object>();
             foreach (var b in bookings)
@@ -514,34 +396,61 @@ namespace EventEase.Api.Controllers
         }
 
         [HttpGet("/api/v1/bookings")]
-        public async Task<IActionResult> GetBookings([FromQuery] string? userId)
+        public async Task<IActionResult> GetBookings(
+            [FromQuery] string? userId,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = DefaultPageSize)
         {
             var currentUserId = GetUserId();
             var currentRole = GetUserRole();
             Guid searchUserId = currentUserId;
 
-            // [SECURITY] Only Admin/Support/Vendor can query other users' bookings
+            // [SECURITY] Reading another user's bookings is a staff action. The Vendor role used
+            // to be accepted here, which let any vendor account enumerate any customer's bookings;
+            // vendors see their own work through /api/v1/vendor/bookings instead.
             if (!string.IsNullOrEmpty(userId) && Guid.TryParse(userId, out var requestedUserId))
             {
-                if (requestedUserId != currentUserId)
+                if (requestedUserId != currentUserId && !IsStaff(currentRole))
                 {
-                    var isPrivileged = currentRole != null && 
-                        (currentRole.Equals("Admin", StringComparison.OrdinalIgnoreCase) ||
-                         currentRole.Equals("Support", StringComparison.OrdinalIgnoreCase) ||
-                         currentRole.Equals("Vendor", StringComparison.OrdinalIgnoreCase));
-                    if (!isPrivileged) return Forbid();
+                    return Forbid();
                 }
                 searchUserId = requestedUserId;
             }
 
             if (searchUserId == Guid.Empty) return BadRequest(new { error = "Invalid user ID" });
 
-            var bookings = await _db.Bookings
-                .Where(b => b.UserId == searchUserId)
+            var query = _db.Bookings.Where(b => b.UserId == searchUserId);
+            return Ok(await PagedBookingsAsync(query, page, pageSize));
+        }
+
+        private const int DefaultPageSize = 25;
+        private const int MaxPageSize = 100;
+
+        /// <summary>
+        /// Returns one page of bookings, newest event first. Unbounded list endpoints previously
+        /// loaded a caller's entire booking history on every request.
+        /// </summary>
+        private async Task<object> PagedBookingsAsync(IQueryable<Booking> query, int page, int pageSize)
+        {
+            page = page < 1 ? 1 : page;
+            pageSize = pageSize is < 1 or > MaxPageSize ? DefaultPageSize : pageSize;
+
+            var total = await query.CountAsync();
+            var bookings = await query
+                .OrderByDescending(b => b.EventDate)
+                .ThenBy(b => b.Id)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
                 .ToListAsync();
 
-            var result = await MapBookingsToDtosAsync(bookings);
-            return Ok(result);
+            return new
+            {
+                items = await MapBookingsToDtosAsync(bookings),
+                page,
+                pageSize,
+                total,
+                totalPages = (int)Math.Ceiling(total / (double)pageSize)
+            };
         }
 
         private Guid GetUserId()
@@ -557,11 +466,14 @@ namespace EventEase.Api.Controllers
                    ?? User.FindFirst("role")?.Value;
         }
 
-        public record ConfirmPaymentRequest(string ProviderRef, string Status);
+        // Status is no longer accepted from the caller: the result is read back from the provider.
+        public record ConfirmPaymentRequest(string ProviderRef);
         public record UpdateStatusRequest(string Status);
         public record CancelBookingRequest(
-            string Reason, 
-            string CancelledBy,
+            string Reason,
+            // Only honoured for staff; for customers and vendors the platform derives this from
+            // the caller's relationship to the booking.
+            string? CancelledBy = null,
             DateTime? CancellationDate = null,
             decimal? CancellationFee = null,
             decimal? PlatformCancellationFeeRetained = null,
@@ -585,21 +497,19 @@ namespace EventEase.Api.Controllers
 
         [Authorize(Policy = "Vendor")]
         [HttpGet("/api/v1/bookings/vendor")]
-        public async Task<IActionResult> GetVendorBookings()
+        public async Task<IActionResult> GetVendorBookings(
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = DefaultPageSize)
         {
             var userId = GetUserId();
-            var vendor = await _db.Vendors.FirstOrDefaultAsync(v => v.UserId == userId);
+            var vendor = await _db.Vendors.AsNoTracking().FirstOrDefaultAsync(v => v.UserId == userId);
             if (vendor == null)
             {
                 return NotFound(new { error = "Vendor profile not found" });
             }
 
-            var bookings = await _db.Bookings
-                .Where(b => b.VendorId == vendor.Id || b.VendorId == vendor.UserId)
-                .ToListAsync();
-
-            var result = await MapBookingsToDtosAsync(bookings);
-            return Ok(result);
+            var query = _db.Bookings.Where(b => b.VendorId == vendor.Id || b.VendorId == vendor.UserId);
+            return Ok(await PagedBookingsAsync(query, page, pageSize));
         }
 
         [Authorize]
@@ -608,6 +518,26 @@ namespace EventEase.Api.Controllers
         {
             var booking = await _db.Bookings.FindAsync(bookingId);
             if (booking is null) return NotFound();
+
+            // [SECURITY] This endpoint had no ownership check at all: any authenticated user could
+            // move any booking to any date.
+            if (!await CanAccessBookingAsync(booking)) return Forbid();
+
+            if (req is null) return BadRequest(new { error = "A new date is required." });
+            if (req.NewDate.Date < DateTime.UtcNow.Date)
+                return BadRequest(new { error = "The new event date cannot be in the past." });
+
+            if (booking.Status.Equals(BookingStatuses.Cancelled, StringComparison.OrdinalIgnoreCase) ||
+                booking.Status.Equals(BookingStatuses.Completed, StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new { error = "A cancelled or completed booking cannot be rescheduled." });
+            }
+
+            var isAvailable = await _calendarService.CheckAvailabilityAsync(booking.VendorId, req.NewDate);
+            if (!isAvailable)
+            {
+                return BadRequest(new { error = "The vendor is not available on the selected date." });
+            }
 
             var oldDate = booking.EventDate;
             booking.EventDate = req.NewDate;
@@ -629,7 +559,15 @@ namespace EventEase.Api.Controllers
         [HttpGet("/api/v1/bookings/{bookingId:guid}/logs")]
         public async Task<IActionResult> GetBookingLogs(Guid bookingId)
         {
+            var booking = await _db.Bookings.AsNoTracking().FirstOrDefaultAsync(b => b.Id == bookingId);
+            if (booking is null) return NotFound();
+
+            // [SECURITY] Logs carry cancellation reasons, refund amounts and dispute details, and
+            // were readable for any booking id by any authenticated caller.
+            if (!await CanAccessBookingAsync(booking)) return Forbid();
+
             var logs = await _db.BookingLogs
+                .AsNoTracking()
                 .Where(l => l.BookingId == bookingId)
                 .OrderBy(l => l.CreatedAt)
                 .ToListAsync();
@@ -651,15 +589,32 @@ namespace EventEase.Api.Controllers
                 return StatusCode(403, new { error = "You do not have permission to pay for this booking." });
             }
 
-            decimal amountToPay = booking.Amount;
-            if (!booking.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase))
+            if (booking.Status.Equals(BookingStatuses.Cancelled, StringComparison.OrdinalIgnoreCase) ||
+                booking.Status.Equals(BookingStatuses.Rejected, StringComparison.OrdinalIgnoreCase))
             {
-                amountToPay = booking.TotalAmount - booking.AdvanceAmount;
+                return BadRequest(new { error = "This booking is no longer payable." });
             }
+            if (booking.Status.Equals(BookingStatuses.Settled, StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new { error = "This booking is already fully paid." });
+            }
+
+            // Pending bookings pay the advance; anything further along pays the remaining balance.
+            decimal amountToPay = booking.Status.Equals(BookingStatuses.Pending, StringComparison.OrdinalIgnoreCase)
+                ? booking.AdvanceAmount
+                : booking.TotalAmount - booking.AdvanceAmount;
 
             if (amountToPay <= 0)
             {
                 return BadRequest(new { error = "This booking is already fully paid." });
+            }
+
+            // Reuse an in-flight attempt instead of stacking up Initiated rows on repeated taps.
+            var existing = await _db.Payments
+                .FirstOrDefaultAsync(p => p.BookingId == booking.Id && p.Status == "Initiated");
+            if (existing is not null && existing.Amount == amountToPay)
+            {
+                return Ok(new { paymentId = existing.Id, providerRef = existing.ProviderReference });
             }
 
             var (refId, _) = await _gateway.InitiateAsync(booking.Id, amountToPay, req.PaymentMethod);
@@ -673,43 +628,67 @@ namespace EventEase.Api.Controllers
         [HttpPost("/api/v1/payment/confirm")]
         public async Task<IActionResult> Confirm([FromBody] ConfirmPaymentRequest req)
         {
+            if (req is null || string.IsNullOrWhiteSpace(req.ProviderRef))
+                return BadRequest(new { error = "A payment reference is required." });
+
             var payment = await _db.Payments.FirstOrDefaultAsync(p => p.ProviderReference == req.ProviderRef);
             if (payment is null) return NotFound();
-            
-            var ok = await _gateway.ConfirmAsync(req.ProviderRef, req.Status);
-            payment.Status = ok ? "Succeeded" : "Failed";
-            
+
             var booking = await _db.Bookings.FindAsync(payment.BookingId);
-            if (booking is not null && ok) {
-                // If the booking was already confirmed/completed/etc, it means we are paying the final balance.
-                // In that case, set status to Settled and record the FinalPaidAmount.
-                if (!booking.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase))
+            if (booking is null) return NotFound();
+
+            // [SECURITY] The caller must be a party to this booking. Previously any authenticated
+            // user could confirm any payment by guessing or replaying a reference.
+            if (!await CanAccessBookingAsync(booking)) return Forbid();
+
+            // [SECURITY] Idempotency: a settled payment is never re-applied, so replaying this
+            // call cannot award loyalty points or advance the booking a second time.
+            if (!payment.Status.Equals("Initiated", StringComparison.OrdinalIgnoreCase))
+            {
+                return Ok(new { status = payment.Status, alreadyProcessed = true });
+            }
+
+            // [SECURITY] The outcome is read back from the payment provider. The client's own
+            // claim about whether the payment succeeded is not trusted.
+            var ok = await _gateway.VerifyPaymentAsync(req.ProviderRef);
+            payment.Status = ok ? "Succeeded" : "Failed";
+
+            // The payment record, the booking status, the loyalty award and the RFP close are one
+            // unit of work: a partial commit would leave a booking paid with no points, or points
+            // awarded for a booking that never advanced.
+            await using var tx = await _db.Database.BeginTransactionAsync();
+
+            if (ok)
+            {
+                // A booking still Pending is receiving its advance; anything further along is
+                // receiving the balance, which settles it.
+                if (booking.Status.Equals(BookingStatuses.Pending, StringComparison.OrdinalIgnoreCase))
                 {
-                    booking.Status = "Settled";
-                    booking.FinalPaidAmount = booking.TotalAmount;
+                    booking.Status = BookingStatuses.Paid;
                     _db.BookingLogs.Add(new BookingLog
                     {
                         Id = Guid.NewGuid(),
                         BookingId = booking.Id,
-                        Message = "Booking fully settled via successful balance payment confirmation.",
+                        Message = "Advance payment confirmed by the payment provider.",
                         Actor = "System",
                         CreatedAt = DateTime.UtcNow
                     });
                 }
                 else
                 {
-                    booking.Status = "Paid";
+                    booking.Status = BookingStatuses.Settled;
+                    booking.FinalPaidAmount = booking.TotalAmount;
                     _db.BookingLogs.Add(new BookingLog
                     {
                         Id = Guid.NewGuid(),
                         BookingId = booking.Id,
-                        Message = "Booking confirmed via successful payment confirmation.",
+                        Message = "Balance payment confirmed by the payment provider; booking settled.",
                         Actor = "System",
                         CreatedAt = DateTime.UtcNow
                     });
                 }
 
-                // Award points: 10 points for every ₹100 spent in this specific payment transaction
+                // Award points: 10 points for every 100 spent in this specific payment transaction.
                 int pointsEarned = (int)(payment.Amount / 100) * 10;
                 if (pointsEarned > 0)
                 {
@@ -727,7 +706,10 @@ namespace EventEase.Api.Controllers
                     }
                 }
             }
+
             await _db.SaveChangesAsync();
+            await tx.CommitAsync();
+
             return Ok(new { status = payment.Status });
         }
 
@@ -738,22 +720,43 @@ namespace EventEase.Api.Controllers
             var booking = await _db.Bookings.FindAsync(bookingId);
             if (booking is null) return NotFound();
 
-            // [SECURITY] Verify ownership — only booking owner, vendor, or Admin/Support can update
-            var callerId = GetUserId();
-            var callerRole = GetUserRole();
-            var isPrivileged = callerRole != null && 
-                (callerRole.Equals("Admin", StringComparison.OrdinalIgnoreCase) ||
-                 callerRole.Equals("Support", StringComparison.OrdinalIgnoreCase) ||
-                 callerRole.Equals("Vendor", StringComparison.OrdinalIgnoreCase));
-            if (booking.UserId != callerId && !isPrivileged) return Forbid();
-            
-            booking.Status = req.Status;
-            
-            if (req.Status.Equals("settled", StringComparison.OrdinalIgnoreCase))
+            // [SECURITY] Object-level check: the caller must be this booking's customer, this
+            // booking's vendor, or staff.
+            if (!await CanAccessBookingAsync(booking)) return Forbid();
+
+            var target = BookingStatuses.Normalize(req?.Status);
+            if (target is null)
             {
-                booking.FinalPaidAmount = booking.TotalAmount;
+                return BadRequest(new { error = "Unknown booking status." });
             }
-            if (req.Status.Equals("confirmed", StringComparison.OrdinalIgnoreCase) && booking.DamageCharges > 0)
+
+            // [SECURITY] Paid and Settled represent money having moved. Only the payment flow
+            // may set them, otherwise a customer could settle their own booking for free.
+            if (BookingStatuses.PaymentControlled.Contains(target))
+            {
+                return BadRequest(new { error = "This status is set by the payment process and cannot be assigned directly." });
+            }
+
+            if (!BookingStatuses.CanTransition(booking.Status, target))
+            {
+                return BadRequest(new { error = $"A booking cannot move from {booking.Status} to {target}." });
+            }
+
+            var callerRole = GetUserRole();
+            var callerId = GetUserId();
+            var isStaff = IsStaff(callerRole);
+            var isVendor = !isStaff && await IsBookingVendorAsync(booking, callerId);
+
+            // A customer may only withdraw their own booking; fulfilment states belong to the vendor.
+            if (!isStaff && !isVendor && !target.Equals(BookingStatuses.Cancelled, StringComparison.OrdinalIgnoreCase))
+            {
+                return Forbid();
+            }
+
+            var previous = booking.Status;
+            booking.Status = target;
+
+            if (target.Equals(BookingStatuses.Confirmed, StringComparison.OrdinalIgnoreCase) && booking.DamageCharges > 0)
             {
                 booking.IsDamageChargeApproved = true;
             }
@@ -762,13 +765,13 @@ namespace EventEase.Api.Controllers
             {
                 Id = Guid.NewGuid(),
                 BookingId = bookingId,
-                Message = $"Booking status updated to {req.Status}.",
-                Actor = GetUserRole() ?? "System",
+                Message = $"Booking status changed from {previous} to {target}.",
+                Actor = callerRole ?? "System",
                 CreatedAt = DateTime.UtcNow
             });
-            
+
             await _db.SaveChangesAsync();
-            return Ok(new { success = true });
+            return Ok(new { success = true, status = target });
         }
 
         [Authorize]
@@ -778,20 +781,29 @@ namespace EventEase.Api.Controllers
             var booking = await _db.Bookings.FindAsync(bookingId);
             if (booking is null) return NotFound();
 
-            // [SECURITY] Verify ownership — only booking owner, vendor, or Admin/Support can cancel
-            var callerId = GetUserId();
+            // [SECURITY] Object-level check rather than "any vendor may cancel any booking".
+            if (!await CanAccessBookingAsync(booking)) return Forbid();
+
             var callerRole = GetUserRole();
-            var isPrivileged = callerRole != null && 
-                (callerRole.Equals("Admin", StringComparison.OrdinalIgnoreCase) ||
-                 callerRole.Equals("Support", StringComparison.OrdinalIgnoreCase) ||
-                 callerRole.Equals("Vendor", StringComparison.OrdinalIgnoreCase));
-            if (booking.UserId != callerId && !isPrivileged) return Forbid();
-            
-            booking.Status = "Cancelled";
-            booking.CancelledBy = req.CancelledBy;
+
+            if (booking.Status.Equals(BookingStatuses.Cancelled, StringComparison.OrdinalIgnoreCase))
+                return BadRequest(new { error = "This booking is already cancelled." });
+
+            // [SECURITY] Who cancelled decides the refund split, so it is derived from the caller's
+            // actual relationship to this booking. Accepting it from the body let a customer claim
+            // the vendor cancelled and collect a full refund plus a vendor penalty.
+            var callerId = GetUserId();
+            string cancelledBy;
+            if (booking.UserId == callerId) cancelledBy = "customer";
+            else if (await IsBookingVendorAsync(booking, callerId)) cancelledBy = "vendor";
+            else cancelledBy = IsStaff(callerRole) ? (req.CancelledBy ?? "support") : "support";
+
+            booking.Status = BookingStatuses.Cancelled;
+            booking.CancelledBy = cancelledBy;
             booking.CancellationReason = req.Reason;
 
-            DateTime cancelDate = req.CancellationDate ?? DateTime.UtcNow;
+            // Staff may back-date a cancellation during dispute handling; everyone else cancels now.
+            DateTime cancelDate = IsStaff(callerRole) ? (req.CancellationDate ?? DateTime.UtcNow) : DateTime.UtcNow;
             booking.CancellationDate = cancelDate;
 
             decimal refundAmt = 0;
@@ -800,7 +812,12 @@ namespace EventEase.Api.Controllers
             decimal penaltyAmt = 0;
             bool strikeApplied = false;
 
-            if (req.RefundAmount.HasValue && req.CancellationFee.HasValue && req.PlatformCancellationFeeRetained.HasValue)
+            // [SECURITY] Only staff may override the computed refund. A customer supplying these
+            // fields could otherwise cancel and award themselves a full refund plus fees.
+            if (IsStaff(callerRole)
+                && req.RefundAmount.HasValue
+                && req.CancellationFee.HasValue
+                && req.PlatformCancellationFeeRetained.HasValue)
             {
                 refundAmt = req.RefundAmount.Value;
                 cancelFee = req.CancellationFee.Value;
@@ -814,7 +831,7 @@ namespace EventEase.Api.Controllers
                 decimal advancePaid = booking.AdvanceAmount;
                 decimal totalAmount = booking.TotalAmount;
 
-                if (req.CancelledBy.ToLower() == "customer")
+                if (cancelledBy == "customer")
                 {
                     if (booking.Status.ToLower() == "pending")
                     {
@@ -853,7 +870,7 @@ namespace EventEase.Api.Controllers
                         }
                     }
                 }
-                else if (req.CancelledBy.ToLower() == "vendor")
+                else if (cancelledBy == "vendor")
                 {
                     refundAmt = advancePaid;
                     cancelFee = 0m;
@@ -882,8 +899,8 @@ namespace EventEase.Api.Controllers
             {
                 Id = Guid.NewGuid(),
                 BookingId = bookingId,
-                Message = $"Booking cancelled by {req.CancelledBy}. Reason: {req.Reason}. Refund: ₹{refundAmt}, Fee Retained: ₹{cancelFee + platformFee} (Platform Retained: ₹{platformFee})",
-                Actor = req.CancelledBy,
+                Message = $"Booking cancelled by {cancelledBy}. Reason: {req.Reason}. Refund: ₹{refundAmt}, Fee Retained: ₹{cancelFee + platformFee} (Platform Retained: ₹{platformFee})",
+                Actor = cancelledBy,
                 CreatedAt = DateTime.UtcNow
             });
             
@@ -930,14 +947,24 @@ namespace EventEase.Api.Controllers
             var booking = await _db.Bookings.FindAsync(bookingId);
             if (booking is null) return NotFound();
 
-            // [SECURITY] Only Vendor can add damage charges
+            // [SECURITY] Only the vendor fulfilling THIS booking (or staff) may add damage charges.
+            // Holding the Vendor role was previously enough to bill any booking on the platform.
             var callerRole = GetUserRole();
-            if (callerRole == null || !callerRole.Equals("Vendor", StringComparison.OrdinalIgnoreCase))
+            var callerId = GetUserId();
+            if (!IsStaff(callerRole) && !await IsBookingVendorAsync(booking, callerId))
                 return Forbid();
-            
+
+            if (req is null || req.Amount <= 0)
+                return BadRequest(new { error = "Damage charges must be greater than zero." });
+            if (req.Amount > booking.TotalAmount)
+                return BadRequest(new { error = "Damage charges cannot exceed the booking total." });
+
+            // Replace rather than accumulate, and keep the total consistent with the charge that
+            // is actually recorded.
+            booking.TotalAmount = booking.TotalAmount - booking.DamageCharges + req.Amount;
             booking.DamageCharges = req.Amount;
             booking.DamageChargeNotes = req.Notes;
-            booking.TotalAmount += req.Amount;
+            booking.IsDamageChargeApproved = false;
 
             _db.BookingLogs.Add(new BookingLog
             {
@@ -963,7 +990,12 @@ namespace EventEase.Api.Controllers
             var callerId = GetUserId();
             if (booking.UserId != callerId) return Forbid();
 
-            booking.Status = "Disputed";
+            if (!BookingStatuses.CanTransition(booking.Status, BookingStatuses.Disputed))
+            {
+                return BadRequest(new { error = $"A booking in state {booking.Status} cannot be disputed." });
+            }
+
+            booking.Status = BookingStatuses.Disputed;
             
             _db.BookingLogs.Add(new BookingLog
             {

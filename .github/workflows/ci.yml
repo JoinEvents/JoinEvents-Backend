@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, 'claude/**' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore EventEase.sln
+
+      - name: Build
+        run: dotnet build EventEase.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test EventEase.sln --configuration Release --no-build --verbosity normal
+
+  secret-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Guards against the class of problem this repository already had: credentials and
+      # signing keys committed to source control.
+      - name: Scan for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -9,28 +9,32 @@ namespace EventEase.Application.Blob
 {
     public class GcpBucketService : IBlobService
     {
-        private readonly StorageClient _storageClient;
+        private readonly Lazy<StorageClient> _lazyStorageClient;
         private readonly string _bucketName;
-        private readonly string _projectId;
+
+        private StorageClient Storage => _lazyStorageClient.Value;
 
         public GcpBucketService(IConfiguration config)
         {
-            _projectId = config["Gcp:ProjectId"] ?? string.Empty;
             _bucketName = config["Gcp:BucketName"] ?? string.Empty;
             var credentialsPath = config["Gcp:CredentialsPath"];
 
-            if (string.IsNullOrEmpty(_projectId))
-                throw new InvalidOperationException("Gcp:ProjectId is not configured");
-            if (string.IsNullOrEmpty(_bucketName))
-                throw new InvalidOperationException("Gcp:BucketName is not configured");
-
-            // Initialize GCP Storage Client
             if (!string.IsNullOrEmpty(credentialsPath))
             {
                 Environment.SetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
             }
 
-            _storageClient = StorageClient.Create();
+            // Constructed on first use rather than at registration. This service is a singleton
+            // injected into several controllers, so throwing in the constructor took down
+            // endpoints that never touch object storage. ProjectId is not required for object
+            // operations — application default credentials supply it.
+            _lazyStorageClient = new Lazy<StorageClient>(() =>
+            {
+                if (string.IsNullOrEmpty(_bucketName))
+                    throw new InvalidOperationException("Gcp:BucketName is not configured.");
+
+                return StorageClient.Create();
+            }, isThreadSafe: true);
         }
 
         public async Task<string> UploadAsync(IFormFile file, string userId)
@@ -46,7 +50,7 @@ namespace EventEase.Application.Blob
                 using var stream = file.OpenReadStream();
                 
                 // Upload to GCS with metadata
-                var obj = await _storageClient.UploadObjectAsync(
+                var obj = await Storage.UploadObjectAsync(
                     _bucketName,
                     fileName,
                     file.ContentType,
@@ -72,12 +76,12 @@ namespace EventEase.Application.Blob
 
             try
             {
-                var obj = await _storageClient.GetObjectAsync(_bucketName, blobName);
+                var obj = await Storage.GetObjectAsync(_bucketName, blobName);
                 if (obj == null)
                     return null;
 
                 var memoryStream = new MemoryStream();
-                await _storageClient.DownloadObjectAsync(_bucketName, blobName, memoryStream);
+                await Storage.DownloadObjectAsync(_bucketName, blobName, memoryStream);
                 memoryStream.Position = 0;
                 return memoryStream;
             }
@@ -98,7 +102,7 @@ namespace EventEase.Application.Blob
 
             try
             {
-                await _storageClient.DeleteObjectAsync(_bucketName, blobName);
+                await Storage.DeleteObjectAsync(_bucketName, blobName);
                 return true;
             }
             catch (Google.GoogleApiException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.NotFound)

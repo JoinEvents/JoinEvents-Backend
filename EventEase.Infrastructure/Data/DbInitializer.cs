@@ -11,33 +11,123 @@ namespace EventEase.Infrastructure.Data
 {
     public static class DbInitializer
     {
-        public static void Seed(EventEaseDbContext db)
+        /// <summary>
+        /// Applies data that every environment needs (reference data), optionally bootstraps a
+        /// single administrator from configuration, and only seeds demo fixtures when explicitly
+        /// enabled.
+        /// </summary>
+        /// <param name="db">Database context.</param>
+        /// <param name="options">
+        /// Controls admin bootstrap and demo seeding. Demo seeding must never be enabled in
+        /// production: it creates well-known accounts.
+        /// </param>
+        public static void Seed(EventEaseDbContext db, SeedOptions options)
         {
-            // db.Database.EnsureCreated(); // [EF Core] Schema is already applied by db.Database.Migrate() in Program.cs
+            ArgumentNullException.ThrowIfNull(options);
 
-            // ── Always ensure admin & support accounts exist ──────────────────
-            EnsureAdminUsers(db);
             EnsureTiers(db);
+            EnsureAdminUser(db, options);
 
-            // ── Full seed only on empty DB ────────────────────────────────────
-            if (db.Users.Count() > 2) return; // vendor + customer already seeded
+            if (options.SeedDemoData)
+            {
+                SeedDemoData(db);
+            }
+        }
 
-            var user = new User { Id = Guid.NewGuid(), Name = "Test User", Phone = "9999999999", Email = "user@test.com", Role = AuthRoles.Customer, PasswordHash = Hash("test") };
-            var vendorUser = new User { Id = Guid.NewGuid(), Name = "Vendor User", Phone = "8888888888", Email = "vendor@test.com", Role = AuthRoles.Vendor, PasswordHash = Hash("test") };
-            var AdminUser = new User { Id = Guid.NewGuid(), Name = "Admin User", Phone = "8888888888", Email = "admin@test.com", Role = AuthRoles.Admin, PasswordHash = Hash("test") };
-            var SupportUser = new User { Id = Guid.NewGuid(), Name = "Support User", Phone = "8888888888", Email = "support@test.com", Role = AuthRoles.Support, PasswordHash = Hash("test") };
-            db.Users.AddRange(user, vendorUser, AdminUser, SupportUser);
+        /// <summary>
+        /// Creates the initial administrator if — and only if — no administrator exists yet.
+        /// An existing admin's password is never reset here: doing so on every start would
+        /// silently revert any password the operator has since chosen.
+        /// </summary>
+        private static void EnsureAdminUser(EventEaseDbContext db, SeedOptions options)
+        {
+            if (string.IsNullOrWhiteSpace(options.AdminEmail) || string.IsNullOrWhiteSpace(options.AdminPassword))
+            {
+                // Nothing configured — leave the database alone rather than inventing credentials.
+                return;
+            }
 
-            var vendor = new Vendor { Id = Guid.NewGuid(), UserId = vendorUser.Id, BusinessName = "Dream Weddings", Description = "Full service wedding planner", Location = "Hyderabad", IsValidated = true };
+            if (db.Users.Any(u => u.Role == AuthRoles.Admin))
+            {
+                return;
+            }
+
+            var email = options.AdminEmail.Trim().ToLowerInvariant();
+            if (db.Users.Any(u => u.Email == email))
+            {
+                return;
+            }
+
+            db.Users.Add(new User
+            {
+                Id = Guid.NewGuid(),
+                Name = "Administrator",
+                Email = email,
+                Phone = string.Empty,
+                Role = AuthRoles.Admin,
+                PasswordHash = Hash(options.AdminPassword),
+                CreatedAt = DateTime.UtcNow
+            });
+
+            db.SaveChanges();
+        }
+
+        /// <summary>
+        /// Demo fixtures for local development and test runs only. These accounts use a shared,
+        /// well-known password and must never be created in a deployed environment.
+        /// </summary>
+        private static void SeedDemoData(EventEaseDbContext db)
+        {
+            const string demoPassword = "DemoPassw0rd!";
+
+            if (db.Users.Any(u => u.Email == "customer@example.test")) return;
+
+            var customer = new User
+            {
+                Id = Guid.NewGuid(),
+                Name = "Demo Customer",
+                Phone = "9999999999",
+                Email = "customer@example.test",
+                Role = AuthRoles.Customer,
+                PasswordHash = Hash(demoPassword)
+            };
+            var vendorUser = new User
+            {
+                Id = Guid.NewGuid(),
+                Name = "Demo Vendor",
+                Phone = "8888888888",
+                Email = "vendor@example.test",
+                Role = AuthRoles.Vendor,
+                PasswordHash = Hash(demoPassword)
+            };
+            var supportUser = new User
+            {
+                Id = Guid.NewGuid(),
+                Name = "Demo Support",
+                Phone = "7777777777",
+                Email = "support@example.test",
+                Role = AuthRoles.Support,
+                PasswordHash = Hash(demoPassword)
+            };
+            db.Users.AddRange(customer, vendorUser, supportUser);
+
+            var vendor = new Vendor
+            {
+                Id = Guid.NewGuid(),
+                UserId = vendorUser.Id,
+                BusinessName = "Dream Weddings",
+                Description = "Full service wedding planner",
+                Location = "Hyderabad",
+                IsValidated = true
+            };
             db.Vendors.Add(vendor);
 
-            var services = new List<Service>
+            db.Services.AddRange(new List<Service>
             {
-                new Service { Id = Guid.NewGuid(), VendorId = vendor.Id, Name = "Catering",     Category = "Food",  Price = 50000 },
-                new Service { Id = Guid.NewGuid(), VendorId = vendor.Id, Name = "Photography",  Category = "Media", Price = 30000 },
-                new Service { Id = Guid.NewGuid(), VendorId = vendor.Id, Name = "Decoration",   Category = "Decor", Price = 20000 }
-            };
-            db.Services.AddRange(services);
+                new Service { Id = Guid.NewGuid(), VendorId = vendor.Id, Name = "Catering",    Category = "Food",  Price = 50000 },
+                new Service { Id = Guid.NewGuid(), VendorId = vendor.Id, Name = "Photography", Category = "Media", Price = 30000 },
+                new Service { Id = Guid.NewGuid(), VendorId = vendor.Id, Name = "Decoration",  Category = "Decor", Price = 20000 }
+            });
 
             db.Packages.Add(new Package
             {
@@ -51,145 +141,6 @@ namespace EventEase.Infrastructure.Data
             });
 
             db.SaveChanges();
-        }
-
-        /// <summary>
-        /// Adds admin/support/vendor/customer test accounts if they don't already exist.
-        /// Safe to call on any existing database.
-        /// </summary>
-        private static void EnsureAdminUsers(EventEaseDbContext db)
-        {
-            bool changed = false;
-
-            var admin = db.Users.FirstOrDefault(u => u.Email == "admin@gmail.com");
-            if (admin == null)
-            {
-                db.Users.Add(new User
-                {
-                    Id = Guid.NewGuid(),
-                    Name = "Admin User",
-                    Phone = "9988776655",
-                    Email = "admin@gmail.com",
-                    Role = AuthRoles.Admin,
-                    PasswordHash = Hash("test")
-                });
-                changed = true;
-            }
-            else
-            {
-                admin.PasswordHash = Hash("test");
-                admin.Role = AuthRoles.Admin;
-                changed = true;
-            }
-
-            var support = db.Users.FirstOrDefault(u => u.Email == "support@gmail.com");
-            if (support == null)
-            {
-                db.Users.Add(new User
-                {
-                    Id = Guid.NewGuid(),
-                    Name = "Support User",
-                    Phone = "9900011223",
-                    Email = "support@gmail.com",
-                    Role = AuthRoles.Support,
-                    PasswordHash = Hash("test")
-                });
-                changed = true;
-            }
-            else
-            {
-                support.PasswordHash = Hash("test");
-                support.Role = AuthRoles.Support;
-                changed = true;
-            }
-
-            var customer = db.Users.FirstOrDefault(u => u.Email == "customer@gmail.com");
-            if (customer == null)
-            {
-                db.Users.Add(new User
-                {
-                    Id = Guid.NewGuid(),
-                    Name = "Customer User",
-                    Phone = "9911223344",
-                    Email = "customer@gmail.com",
-                    Role = AuthRoles.Customer,
-                    PasswordHash = Hash("test")
-                });
-                changed = true;
-            }
-            else
-            {
-                customer.PasswordHash = Hash("test");
-                customer.Role = AuthRoles.Customer;
-                changed = true;
-            }
-
-            var vendorUser = db.Users.FirstOrDefault(u => u.Email == "vendor@gmail.com");
-            if (vendorUser == null)
-            {
-                vendorUser = new User
-                {
-                    Id = Guid.NewGuid(),
-                    Name = "Vendor User",
-                    Phone = "8899001122",
-                    Email = "vendor@gmail.com",
-                    Role = AuthRoles.Vendor,
-                    PasswordHash = Hash("test")
-                };
-                db.Users.Add(vendorUser);
-                changed = true;
-            }
-            else
-            {
-                vendorUser.PasswordHash = Hash("test");
-                vendorUser.Role = AuthRoles.Vendor;
-                changed = true;
-            }
-
-            if (changed) db.SaveChanges();
-
-            // Ensure Vendor profile for vendor@gmail.com
-            if (!db.Vendors.Any(v => v.UserId == vendorUser.Id))
-            {
-                db.Vendors.Add(new Vendor
-                {
-                    Id = Guid.NewGuid(),
-                    UserId = vendorUser.Id,
-                    BusinessName = "Premier Event Services",
-                    Description = "Full service event planning & catering vendor",
-                    Location = "Hyderabad",
-                    IsValidated = true
-                });
-                db.SaveChanges();
-            }
-
-            if (!db.Users.Any(u => u.Email == "admin@test.com"))
-            {
-                db.Users.Add(new User
-                {
-                    Id = Guid.NewGuid(),
-                    Name = "Priya Nair",
-                    Phone = "9988776655",
-                    Email = "admin@test.com",
-                    Role = AuthRoles.Admin,
-                    PasswordHash = Hash("test")
-                });
-                db.SaveChanges();
-            }
-
-            if (!db.Users.Any(u => u.Email == "support@test.com"))
-            {
-                db.Users.Add(new User
-                {
-                    Id = Guid.NewGuid(),
-                    Name = "Rahul Support",
-                    Phone = "9900011223",
-                    Email = "support@test.com",
-                    Role = "Support",
-                    PasswordHash = Hash("test")
-                });
-                db.SaveChanges();
-            }
         }
 
         private static void EnsureTiers(EventEaseDbContext db)
@@ -271,10 +222,28 @@ namespace EventEase.Infrastructure.Data
             db.SaveChanges();
         }
 
+
+        /// <summary>
+        /// Hashes a seed password with BCrypt, matching the work factor used by the auth service.
+        /// </summary>
         private static string Hash(string password)
         {
-            using var sha = SHA256.Create();
-            return Convert.ToBase64String(sha.ComputeHash(Encoding.UTF8.GetBytes(password)));
+            return BCrypt.Net.BCrypt.HashPassword(password, workFactor: 12);
         }
+    }
+
+    /// <summary>
+    /// Seeding inputs, resolved from configuration by the host.
+    /// </summary>
+    public sealed class SeedOptions
+    {
+        /// <summary>Email for the bootstrap administrator. Null disables admin bootstrap.</summary>
+        public string? AdminEmail { get; init; }
+
+        /// <summary>Password for the bootstrap administrator. Null disables admin bootstrap.</summary>
+        public string? AdminPassword { get; init; }
+
+        /// <summary>When true, seeds demo accounts and catalogue fixtures. Never enable in production.</summary>
+        public bool SeedDemoData { get; init; }
     }
 }

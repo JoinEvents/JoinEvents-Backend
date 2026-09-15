@@ -115,10 +115,31 @@ namespace EventEase.Application.Chat
             }).ToList();
         }
 
+        /// <summary>
+        /// True when the user is a party to the thread. ChatThread.VendorId holds the vendor's
+        /// *user* id, but some legacy rows hold the Vendor profile id, so both are accepted.
+        /// </summary>
+        public async Task<bool> IsParticipantAsync(Guid threadId, Guid userId)
+        {
+            if (userId == Guid.Empty) return false;
+
+            var thread = await _db.ChatThreads.AsNoTracking().FirstOrDefaultAsync(t => t.Id == threadId);
+            if (thread is null) return false;
+
+            if (thread.CustomerId == userId || thread.VendorId == userId) return true;
+
+            var vendor = await _db.Vendors.AsNoTracking().FirstOrDefaultAsync(v => v.UserId == userId);
+            return vendor is not null && thread.VendorId == vendor.Id;
+        }
+
         public async Task<MessageResponse?> SendMessageAsync(Guid threadId, Guid senderId, SendMessageRequest dto)
         {
             var thread = await _db.ChatThreads.FindAsync(threadId);
             if (thread is null) return null;
+
+            // [SECURITY] Only the two parties to a conversation may post into it. Without this,
+            // any authenticated user could write into any thread by id.
+            if (!await IsParticipantAsync(threadId, senderId)) return null;
 
             if (thread.Status == "Rejected" || thread.Status == "Closed")
             {

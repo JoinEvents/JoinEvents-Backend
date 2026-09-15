@@ -446,7 +446,7 @@ namespace EventEase.Api.Controllers
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine("NOTIFICATION ERROR (Winning Vendor): " + ex.Message);
+                        Serilog.Log.Error(ex, "Failed to notify winning vendor");
                     }
                 }
 
@@ -464,7 +464,7 @@ namespace EventEase.Api.Controllers
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine("NOTIFICATION ERROR (Rejected Vendor): " + ex.Message);
+                            Serilog.Log.Error(ex, "Failed to notify rejected vendor");
                         }
                     }
                 }
@@ -478,7 +478,7 @@ namespace EventEase.Api.Controllers
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("NOTIFICATION ERROR (Customer): " + ex.Message);
+                    Serilog.Log.Error(ex, "Failed to notify customer");
                 }
 
                 // 3. Return booking details
@@ -499,8 +499,9 @@ namespace EventEase.Api.Controllers
             }
             catch (Exception ex)
             {
-                Console.WriteLine("ACCEPT OFFER ERROR: " + ex.ToString());
-                return StatusCode(500, new { success = false, message = "Error accepting offer: " + ex.Message });
+                
+                Serilog.Log.Error(ex, "Error accepting offer");
+                return StatusCode(500, new { success = false, message = "Error accepting offer. Please try again later." });
             }
         }
     }

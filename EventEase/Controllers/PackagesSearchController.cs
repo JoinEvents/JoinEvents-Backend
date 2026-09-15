@@ -238,7 +238,8 @@ namespace EventEase.Api.Controllers
             catch (Exception ex)
             {
                 Serilog.Log.Error(ex, "Error during Package Search");
-                return StatusCode(500, new { error = "Search Failed", details = ex.Message });
+                Serilog.Log.Error(ex, "Package search failed");
+                return StatusCode(500, new { error = "Search failed. Please try again later." });
             }
         }
 
@@ -403,7 +404,8 @@ namespace EventEase.Api.Controllers
             catch (System.Exception ex)
             {
                 Serilog.Log.Error(ex, "Error retrieving package {PackageId}", packageId);
-                return StatusCode(500, new { error = "Backend Error", details = ex.Message });
+                Serilog.Log.Error(ex, "Package search operation failed");
+                return StatusCode(500, new { error = "The request could not be completed. Please try again later." });
             }
         }
 

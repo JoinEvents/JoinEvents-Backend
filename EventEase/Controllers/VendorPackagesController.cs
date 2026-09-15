@@ -305,7 +305,8 @@ namespace EventEase.Api.Controllers
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { error = "Backend Error", details = ex.Message, inner = ex.InnerException?.Message });
+                Serilog.Log.Error(ex, "Vendor package operation failed");
+                return StatusCode(500, new { error = "The request could not be completed. Please try again later." });
             }
         }
 
@@ -347,7 +348,8 @@ namespace EventEase.Api.Controllers
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { error = "Backend Error", details = ex.Message, inner = ex.InnerException?.Message });
+                Serilog.Log.Error(ex, "Vendor package operation failed");
+                return StatusCode(500, new { error = "The request could not be completed. Please try again later." });
             }
         }
 

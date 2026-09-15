@@ -10,17 +10,15 @@ using EventEase.Application.Vendors;
 using EventEase.Application.Loyalty;
 using EventEase.Application.Tiers;
 using EventEase.Core.Constants;
-using EventEase.Core.Enums;
-using EventEase.Infrastructure;
 using EventEase.Infrastructure.Data;
-using EventEase.Infrastructure.Otp;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Caching.StackExchangeRedis;
 using Microsoft.IdentityModel.Tokens;
-using StackExchange.Redis;
+using System.Security.Claims;
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -33,114 +31,212 @@ Log.Logger = new LoggerConfiguration()
 
 builder.Host.UseSerilog();
 
+// ---------------------------------------------------------------------------
+// Configuration: fail fast on anything missing rather than falling back to a
+// default that would silently weaken security.
+// ---------------------------------------------------------------------------
 
-// Add services to the container.
-builder.Services.AddAuthentication("Bearer")
+// [SECURITY] The signing key must be a real secret. A missing key, or an unexpanded
+// "${VAR}" placeholder left over from the config template, would otherwise become the
+// HMAC key — a value committed to the repository, letting anyone forge admin tokens.
+var jwtKey = builder.Configuration["Jwt:Key"];
+if (string.IsNullOrWhiteSpace(jwtKey) || jwtKey.Contains("${") || jwtKey.Contains("dummy"))
+{
+    throw new InvalidOperationException(
+        "[SECURITY] JWT signing key is not configured. Set the Jwt__Key environment variable " +
+        "(or Jwt:Key in configuration) to a random secret of at least 32 characters.");
+}
+if (Encoding.UTF8.GetByteCount(jwtKey) < 32)
+{
+    throw new InvalidOperationException(
+        "[SECURITY] JWT signing key is too short. HMAC-SHA256 requires at least 32 bytes of key material.");
+}
+
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+if (string.IsNullOrWhiteSpace(connectionString) || connectionString.Contains("${"))
+{
+    throw new InvalidOperationException(
+        "[STARTUP] Database connection string is not configured. Set the " +
+        "ConnectionStrings__DefaultConnection environment variable.");
+}
+
+var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
+                     ?? Array.Empty<string>();
+if (allowedOrigins.Length == 0)
+{
+    if (builder.Environment.IsProduction())
+    {
+        throw new InvalidOperationException(
+            "[SECURITY] No AllowedOrigins configured. Set the AllowedOrigins array so CORS " +
+            "does not fall back to an unintended default.");
+    }
+    allowedOrigins = new[] { "http://localhost:4200" };
+}
+
+builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
+
+// ---------------------------------------------------------------------------
+// Authentication / authorization
+// ---------------------------------------------------------------------------
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
-        // [SECURITY] JWT key must be configured — fail loudly if missing
-        var jwtKey = builder.Configuration["Jwt:Key"];
-        if (string.IsNullOrEmpty(jwtKey) || jwtKey.Contains("dummy"))
-        {
-            jwtKey = Environment.GetEnvironmentVariable("EVENT_EASE_JWT_KEY")
-                     ?? throw new InvalidOperationException("[SECURITY] JWT signing key is not configured. Set 'Jwt:Key' in appsettings or EVENT_EASE_JWT_KEY environment variable.");
-        }
-        if (jwtKey.Contains("${"))
-        {
-            foreach (System.Collections.DictionaryEntry ev in Environment.GetEnvironmentVariables())
-            {
-                var key = ev.Key.ToString();
-                var value = ev.Value?.ToString();
-                if (!string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(value))
-                {
-                    jwtKey = jwtKey.Replace($"${{{key}}}", value);
-                    jwtKey = jwtKey.Replace($"${key}", value);
-                }
-            }
-        }
-
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
             ValidateAudience = true,
-            ValidateLifetime = true, // [SECURITY] Tokens must expire
+            ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
             ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "EventEase",
             ValidAudience = builder.Configuration["Jwt:Audience"] ?? "EventEase",
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
-            RoleClaimType = System.Security.Claims.ClaimTypes.Role
+            RoleClaimType = ClaimTypes.Role,
+            ClockSkew = TimeSpan.FromSeconds(30)
+        };
+
+        // Browsers cannot set an Authorization header on a WebSocket handshake, so SignalR
+        // sends the token as a query string parameter. Without this the chat hub can never
+        // authenticate a browser client.
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                var accessToken = context.Request.Query["access_token"];
+                var path = context.HttpContext.Request.Path;
+                if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
+                {
+                    context.Token = accessToken;
+                }
+                return Task.CompletedTask;
+            }
         };
     });
 
+// Role checks accept either the standard role claim URI or the short "role" claim, since
+// tokens issued by this API carry both.
+static bool HasAnyRole(ClaimsPrincipal user, params string[] roles) =>
+    user.HasClaim(c =>
+        (c.Type == ClaimTypes.Role || c.Type == "role") &&
+        roles.Any(r => c.Value.Equals(r, StringComparison.OrdinalIgnoreCase)));
+
 builder.Services.AddAuthorization(options =>
 {
-    options.AddPolicy(AuthPolicies.User, p => p.RequireAssertion(context => {
-        var claims = context.User.Claims.Select(c => $"{c.Type}={c.Value}").ToList();
-        Serilog.Log.Information("[User Policy] Evaluating claims: {Claims}", string.Join(", ", claims));
-        return context.User.HasClaim(c => (c.Type == System.Security.Claims.ClaimTypes.Role || c.Type == "role") && (c.Value.Equals(AuthRoles.User, StringComparison.OrdinalIgnoreCase) || c.Value.Equals(AuthRoles.Customer, StringComparison.OrdinalIgnoreCase) || c.Value.Equals(AuthRoles.Admin, StringComparison.OrdinalIgnoreCase) || c.Value.Equals(AuthRoles.Vendor, StringComparison.OrdinalIgnoreCase) || c.Value.Equals(AuthRoles.Support, StringComparison.OrdinalIgnoreCase)));
-    }));
-    options.AddPolicy(AuthPolicies.Vendor, p => p.RequireAssertion(context => context.User.HasClaim(c => (c.Type == System.Security.Claims.ClaimTypes.Role || c.Type == "role") && (c.Value.Equals(AuthRoles.Vendor, StringComparison.OrdinalIgnoreCase) || c.Value.Equals(AuthRoles.Admin, StringComparison.OrdinalIgnoreCase)))));
-    options.AddPolicy(AuthPolicies.Admin, p => p.RequireAssertion(context => context.User.HasClaim(c => (c.Type == System.Security.Claims.ClaimTypes.Role || c.Type == "role") && c.Value.Equals(AuthRoles.Admin, StringComparison.OrdinalIgnoreCase))));
-    options.AddPolicy(AuthPolicies.SupportOrAdmin, p => p.RequireAssertion(context => context.User.HasClaim(c => (c.Type == System.Security.Claims.ClaimTypes.Role || c.Type == "role") && (c.Value.Equals(AuthRoles.Admin, StringComparison.OrdinalIgnoreCase) || c.Value.Equals(AuthRoles.Support, StringComparison.OrdinalIgnoreCase)))));
+    options.AddPolicy(AuthPolicies.User, p => p.RequireAssertion(ctx =>
+        HasAnyRole(ctx.User, AuthRoles.User, AuthRoles.Customer, AuthRoles.Admin, AuthRoles.Vendor, AuthRoles.Support)));
+    options.AddPolicy(AuthPolicies.Vendor, p => p.RequireAssertion(ctx =>
+        HasAnyRole(ctx.User, AuthRoles.Vendor, AuthRoles.Admin)));
+    options.AddPolicy(AuthPolicies.Admin, p => p.RequireAssertion(ctx =>
+        HasAnyRole(ctx.User, AuthRoles.Admin)));
+    options.AddPolicy(AuthPolicies.SupportOrAdmin, p => p.RequireAssertion(ctx =>
+        HasAnyRole(ctx.User, AuthRoles.Admin, AuthRoles.Support)));
 });
-builder.Services.AddControllers();
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+
+// ---------------------------------------------------------------------------
+// Rate limiting — unauthenticated auth endpoints get a far tighter budget.
+// ---------------------------------------------------------------------------
+
+static string ClientKey(HttpContext http) =>
+    http.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+    ?? http.Connection.RemoteIpAddress?.ToString()
+    ?? "unknown";
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    options.AddPolicy(RateLimitPolicies.Authentication, http =>
+        RateLimitPartition.GetFixedWindowLimiter(ClientKey(http), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+        }));
+
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(http =>
+        RateLimitPartition.GetFixedWindowLimiter(ClientKey(http), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 300,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+        }));
+
+    options.OnRejected = async (context, token) =>
+    {
+        context.HttpContext.Response.ContentType = "application/json";
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new { error = "Too many requests", message = "Please slow down and try again shortly." },
+            cancellationToken: token);
+    };
+});
+
+// ---------------------------------------------------------------------------
+// MVC, Swagger, persistence, application services
+// ---------------------------------------------------------------------------
+
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.PropertyNamingPolicy = null;
+        options.JsonSerializerOptions.Converters.Add(new UtcDateTimeConverter());
+    });
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
     c.CustomSchemaIds(type => type.FullName);
+    c.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT",
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Description = "Paste the JWT access token (without the \"Bearer \" prefix)."
+    });
+    c.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
+        {
+            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            {
+                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                {
+                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
 });
 
-var envJwtKey = Environment.GetEnvironmentVariable("EVENT_EASE_JWT_KEY");
-if (!string.IsNullOrEmpty(envJwtKey))
-{
-    builder.Configuration["Jwt:Key"] = envJwtKey;
-}
-builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
-
-// --- SEAMLESS CONNECTIVITY LOGIC ---
-// 1. Try standard .NET Environment Variable: ConnectionStrings__DefaultConnection
-// 2. Try your specific Secret variable: EVENT_EASE_DB_CONNECTION
-// 3. Fallback to appsettings.json
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-
-if (string.IsNullOrEmpty(connectionString) || connectionString.Contains("$"))
-{
-    connectionString = Environment.GetEnvironmentVariable("EVENT_EASE_DB_CONNECTION");
-}
-
-if (string.IsNullOrEmpty(connectionString))
-{
-    Console.WriteLine("[Critical] Database connection string is missing!");
-}
-else
-{
-    // Securely log the connection string (masking the password) to prove it's being read
-    var maskedConnectionString = System.Text.RegularExpressions.Regex.Replace(
-        connectionString,
-        @"Password=[^;]+",
-        "Password=*****");
-    Console.WriteLine($"[Startup] Successfully loaded Connection String: {maskedConnectionString}");
-}
-
-// ✅ FIXED: Configured UseCompatibilityLevel(120) to support SQL Server 2014 compatibility mode and prevent 'Incorrect syntax near WITH' (OPENJSON) errors on Contains queries
 builder.Services.AddDbContext<EventEaseDbContext>(o =>
-  o.UseSqlServer(connectionString, sql => {
+  o.UseSqlServer(connectionString, sql =>
+  {
+      // Compatibility level 120 keeps OPENJSON-based translations off, which SQL Server 2014
+      // cannot parse in Contains() queries.
       sql.UseCompatibilityLevel(120);
       sql.EnableRetryOnFailure(
           maxRetryCount: 5,
           maxRetryDelay: TimeSpan.FromSeconds(30),
           errorNumbersToAdd: null);
   }));
-// -----------------------------------
-//builder.Services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(builder.Configuration["Redis:Connection"]));
-//builder.Services.AddScoped<IOtpService, RedisOtpService>();
+
+builder.Services.AddHttpClient();
+
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<IVendorService, VendorService>();
 builder.Services.AddScoped<IVendorCalendarService, VendorCalendarService>();
 builder.Services.AddScoped<IFileStorage, LocalFileStorage>();
 builder.Services.AddScoped<IPricingEngine, SimplePricingEngine>();
+builder.Services.AddScoped<IBookingPricingService, BookingPricingService>();
 builder.Services.AddScoped<ICartService, CartService>();
+// [SECURITY] There is no real payment integration in this codebase yet. Rather than let a
+// production deployment quietly run on the stub, startup fails unless the operator opts in.
+if (builder.Environment.IsProduction() && !builder.Configuration.GetValue("Payments:AllowSimulator", false))
+{
+    SimulatorGateway.ThrowIfProduction(isProduction: true);
+}
 builder.Services.AddSingleton<IPaymentGateway, SimulatorGateway>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IServices, Services>();
@@ -154,312 +250,149 @@ builder.Services.AddScoped<ILoyaltyService, LoyaltyService>();
 builder.Services.AddScoped<ITierService, TierService>();
 builder.Services.AddSingleton<IBlobService, GcpBucketService>();
 builder.Services.AddSignalR();
-//builder.Services.AddStackExchangeRedisCache(options =>
-//{
-//    options.Configuration = builder.Configuration.GetConnectionString("Redis");
-//    options.InstanceName = "EventEase_";
-//});
 
-builder.Services.AddControllers()
-    .AddJsonOptions(options =>
-    {
-        options.JsonSerializerOptions.PropertyNamingPolicy = null;
-        options.JsonSerializerOptions.Converters.Add(new UtcDateTimeConverter());
-    });
+builder.Services.AddHealthChecks()
+    .AddCheck<DatabaseHealthCheck>("database", tags: new[] { "ready" });
 
-
-// [SECURITY] Restrict CORS to known frontend origins only
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll",
-        policy =>
-        {
-            var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
-                ?? new[] { "https://joinevents.com", "https://www.joinevents.com", "http://localhost:4200" };
-            policy.WithOrigins(allowedOrigins)
-                  .AllowAnyHeader()
-                  .AllowAnyMethod()
-                  .AllowCredentials();
-        });
+    options.AddPolicy("Frontend", policy =>
+        policy.WithOrigins(allowedOrigins)
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials());
+});
+
+// Cloud Run and most ingress proxies terminate TLS, so the client's real scheme and IP
+// arrive in forwarded headers. Without this, HTTPS redirection and per-IP rate limiting
+// both see the proxy instead of the caller.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
 });
 
 var app = builder.Build();
 
-// Ensure verification columns exist in Packages table and notification columns exist in Users table
-try
-{
-    using (var scope = app.Services.CreateScope())
-    {
-        var db = scope.ServiceProvider.GetRequiredService<EventEaseDbContext>();
-        
-        // Subscription columns in Vendors
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[Vendors]') AND name = 'SubscriptionTier')
-            BEGIN
-                ALTER TABLE [dbo].[Vendors] ADD [SubscriptionTier] NVARCHAR(50) NOT NULL DEFAULT 'free';
-                ALTER TABLE [dbo].[Vendors] ADD [SubscriptionBadge] NVARCHAR(100) NULL;
-                ALTER TABLE [dbo].[Vendors] ADD [SubscriptionExpiry] DATETIME2 NULL;
-            END");
-
-        // Platform fee, Escrow, and Guarantee columns in Bookings
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[dbo].[Bookings]') AND name = 'PlatformFeeRate')
-            BEGIN
-                ALTER TABLE [dbo].[Bookings] ADD [PlatformFeeRate] DECIMAL(18,4) NOT NULL DEFAULT 0;
-                ALTER TABLE [dbo].[Bookings] ADD [PlatformFeeAmount] DECIMAL(18,2) NOT NULL DEFAULT 0;
-                ALTER TABLE [dbo].[Bookings] ADD [TdsDeducted] DECIMAL(18,2) NOT NULL DEFAULT 0;
-                ALTER TABLE [dbo].[Bookings] ADD [VendorPayoutAmount] DECIMAL(18,2) NOT NULL DEFAULT 0;
-                ALTER TABLE [dbo].[Bookings] ADD [EscrowStatus] NVARCHAR(50) NOT NULL DEFAULT 'held';
-                ALTER TABLE [dbo].[Bookings] ADD [GuaranteeStatus] NVARCHAR(50) NOT NULL DEFAULT 'active';
-                ALTER TABLE [dbo].[Bookings] ADD [VendorConfirmedAt] DATETIME2 NULL;
-                ALTER TABLE [dbo].[Bookings] ADD [VendorConfirmationDue] DATETIME2 NULL;
-            END");
-
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID(N'[dbo].[Packages]') 
-                AND name = 'VerificationStatus'
-            )
-            BEGIN
-                ALTER TABLE [dbo].[Packages] ADD [VerificationStatus] NVARCHAR(MAX) NOT NULL DEFAULT 'Pending';
-            END");
-
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID(N'[dbo].[Packages]') 
-                AND name = 'VerificationComment'
-            )
-            BEGIN
-                ALTER TABLE [dbo].[Packages] ADD [VerificationComment] NVARCHAR(MAX) NULL;
-            END");
-
-        // Add EmailNotifications, InAppNotifications, SmsNotifications to Users
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID(N'[dbo].[Users]') 
-                AND name = 'EmailNotifications'
-            )
-            BEGIN
-                ALTER TABLE [dbo].[Users] ADD [EmailNotifications] BIT NOT NULL DEFAULT 1;
-            END");
-
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID(N'[dbo].[Users]') 
-                AND name = 'InAppNotifications'
-            )
-            BEGIN
-                ALTER TABLE [dbo].[Users] ADD [InAppNotifications] BIT NOT NULL DEFAULT 1;
-            END");
-
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID(N'[dbo].[Users]') 
-                AND name = 'SmsNotifications'
-            )
-            BEGIN
-                ALTER TABLE [dbo].[Users] ADD [SmsNotifications] BIT NOT NULL DEFAULT 0;
-            END");
-
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID(N'[dbo].[Users]') 
-                AND name = 'Avatar'
-            )
-            BEGIN
-                ALTER TABLE [dbo].[Users] ADD [Avatar] NVARCHAR(MAX) NULL;
-            END");
-
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID(N'[dbo].[SupportTickets]') 
-                AND name = 'AttachmentUrl'
-            )
-            BEGIN
-                ALTER TABLE [dbo].[SupportTickets] ADD [AttachmentUrl] NVARCHAR(MAX) NULL;
-            END");
-
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID(N'[dbo].[SupportTickets]') 
-                AND name = 'BookingId'
-            )
-            BEGIN
-                ALTER TABLE [dbo].[SupportTickets] ADD [BookingId] UNIQUEIDENTIFIER NULL;
-            END");
-
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID(N'[dbo].[SupportTickets]') 
-                AND name = 'Priority'
-            )
-            BEGIN
-                ALTER TABLE [dbo].[SupportTickets] ADD [Priority] NVARCHAR(50) NOT NULL DEFAULT 'Medium';
-            END");
-
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID(N'[dbo].[ChatMessages]') 
-                AND name = 'IsInternal'
-            )
-            BEGIN
-                ALTER TABLE [dbo].[ChatMessages] ADD [IsInternal] BIT NOT NULL DEFAULT 0;
-            END");
-            
-        // Repair any broken ChatThreads that store VendorId instead of UserId
-        db.Database.ExecuteSqlRaw(@"
-            IF EXISTS (SELECT * FROM sys.tables WHERE name = 'ChatThreads' AND type = 'U')
-            BEGIN
-                UPDATE ChatThreads
-                SET VendorId = v.UserId
-                FROM ChatThreads t
-                JOIN Vendors v ON t.VendorId = v.Id
-                WHERE t.VendorId NOT IN (SELECT Id FROM Users);
-            END");
-            
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID(N'[dbo].[Packages]') 
-                AND name = 'Pricing_Cuisine'
-            )
-            BEGIN
-                ALTER TABLE [dbo].[Packages] ADD [Pricing_Cuisine] NVARCHAR(200) NULL;
-            END");
-
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (
-                SELECT * FROM sys.columns 
-                WHERE object_id = OBJECT_ID(N'[dbo].[Packages]') 
-                AND name = 'Pricing_CuisineType'
-            )
-            BEGIN
-                ALTER TABLE [dbo].[Packages] ADD [Pricing_CuisineType] NVARCHAR(50) NULL;
-            END");
-            
-        Console.WriteLine("[Startup DB Schema Check] Package verification status, User notifications, Avatar, AttachmentUrl, BookingId, Priority, and IsInternal columns verified/added successfully.");
-    }
-}
-catch (Exception ex)
-{
-    Console.WriteLine($"[Startup DB Schema Check Error] Failed to update schema: {ex.Message}");
-}
-
-app.UseCors("AllowAll");
-
-// [SECURITY] Add security headers to all responses
-app.Use(async (context, next) =>
-{
-    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
-    context.Response.Headers.Append("X-Frame-Options", "DENY");
-    context.Response.Headers.Append("X-XSS-Protection", "1; mode=block");
-    context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
-    context.Response.Headers.Append("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
-    await next();
-});
-app.UseSerilogRequestLogging();
-app.UseStaticFiles();
-
-var storagePath = Path.Combine(builder.Environment.ContentRootPath, "storage");
-if (!Directory.Exists(storagePath))
-{
-    Directory.CreateDirectory(storagePath);
-}
-app.UseStaticFiles(new StaticFileOptions
-{
-    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(storagePath),
-    RequestPath = "/files"
-});
-
-try
-{
-    using (var scope = app.Services.CreateScope())
-    {
-        var db = scope.ServiceProvider.GetRequiredService<EventEaseDbContext>();
-        
-        // --- DIAGNOSTICS FOR MIGRATION ---
-        var pendingMigrations = db.Database.GetPendingMigrations().ToList();
-        var appliedMigrations = db.Database.GetAppliedMigrations().ToList();
-        
-        Log.Information($"[Migration Diagnostics] Found {appliedMigrations.Count} applied migrations.");
-        Log.Information($"[Migration Diagnostics] Found {pendingMigrations.Count} pending migrations.");
-        
-        if (pendingMigrations.Any())
-        {
-            Log.Information($"[Migration] First pending migration is: {pendingMigrations.First()}");
-        }
-        else
-        {
-            Log.Warning("[Migration] No pending migrations found! EF Core thinks the database is fully up to date.");
-        }
-        // ---------------------------------
-
-        Log.Information("[Migration] Starting database migration...");
-        db.Database.Migrate();
-        Log.Information("[Migration] Database migration completed successfully.");
-        DbInitializer.Seed(db);
-        Log.Information("[Migration] Database seeding completed successfully.");
-    }
-}
-catch (Exception ex)
-{
-    Log.Fatal(ex, "[Migration] Database Migration Failed — {Message}", ex.Message);
-    throw; // ← crash visibly so Cloud Run logs show the real error
-}
-
-app.MapHub<ChatHub>("/hubs/chat");
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
-app.UseMiddleware<AuditMiddleware>();
-// [SECURITY] Always enforce HTTPS redirection
-app.UseHttpsRedirection();
-app.UseAuthentication();
-app.UseAuthorization();
-// Health Check
-app.MapGet("/health", async (EventEaseDbContext db) => {
-    try {
-        await db.Database.CanConnectAsync();
-        return Results.Ok(new { status = "Healthy", database = "Connected" });
-    } catch (Exception ex) {
-        return Results.Problem($"Database Unreachable: {ex.Message}");
-    }
-});
+// ---------------------------------------------------------------------------
+// Pipeline. Order matters: the exception handler is first so it also covers the
+// middleware below it, and the audit log runs after authentication so it can see
+// who the caller is.
+// ---------------------------------------------------------------------------
 
 app.UseExceptionHandler(errorApp =>
 {
     errorApp.Run(async context =>
     {
-        var exceptionHandlerPathFeature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
-        var exception = exceptionHandlerPathFeature?.Error;
+        var feature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
+        Log.Error(feature?.Error, "Unhandled exception while processing {Path}", context.Request.Path);
 
-        Log.Error(exception, "Unhandled exception occurred while processing the request");
-
-        context.Response.StatusCode = 500;
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
         context.Response.ContentType = "application/json";
 
-        // [SECURITY] Never expose internal exception details to clients
-        await context.Response.WriteAsJsonAsync(new {
+        // [SECURITY] Never expose internal exception details to clients.
+        await context.Response.WriteAsJsonAsync(new
+        {
             error = "Internal Server Error",
             message = "An unexpected error occurred. Please try again later."
         });
     });
 });
 
+app.UseForwardedHeaders();
+app.UseHttpsRedirection();
+
+// [SECURITY] Baseline response headers.
+app.Use(async (context, next) =>
+{
+    var headers = context.Response.Headers;
+    headers.Append("X-Content-Type-Options", "nosniff");
+    headers.Append("X-Frame-Options", "DENY");
+    headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+    headers.Append("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+    headers.Append("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+    await next();
+});
+
+app.UseSerilogRequestLogging();
+app.UseStaticFiles();
+
+// Vendor documents written by LocalFileStorage are served from /files.
+var storagePath = Path.Combine(builder.Environment.ContentRootPath, "storage");
+Directory.CreateDirectory(storagePath);
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(storagePath),
+    RequestPath = "/files"
+});
+
+app.UseRouting();
+app.UseCors("Frontend");
+app.UseRateLimiter();
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseMiddleware<AuditMiddleware>();
+
+if (!app.Environment.IsProduction())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.MapHub<ChatHub>("/hubs/chat");
 app.MapControllers();
+
+// Liveness: the process is up. Readiness: dependencies are reachable.
+app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = _ => false
+}).AllowAnonymous();
+app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready")
+}).AllowAnonymous();
+
+// ---------------------------------------------------------------------------
+// Schema and seed data.
+//
+// Migrations are opt-in: EF Core's Migrate() is not safe to run concurrently from
+// several instances, so a multi-instance deployment should run it as a separate
+// release step and leave Database:MigrateOnStartup false.
+// ---------------------------------------------------------------------------
+
+if (builder.Configuration.GetValue("Database:MigrateOnStartup", false))
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<EventEaseDbContext>();
+
+    var pending = db.Database.GetPendingMigrations().ToList();
+    Log.Information("[Migration] {Count} pending migration(s).", pending.Count);
+    db.Database.Migrate();
+    Log.Information("[Migration] Database migration completed.");
+}
+
+try
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<EventEaseDbContext>();
+    DbInitializer.Seed(db, new SeedOptions
+    {
+        AdminEmail = builder.Configuration["Bootstrap:AdminEmail"],
+        AdminPassword = builder.Configuration["Bootstrap:AdminPassword"],
+        // [SECURITY] Demo fixtures use well-known credentials and are never seeded in production.
+        SeedDemoData = !app.Environment.IsProduction()
+                       && builder.Configuration.GetValue("Database:SeedDemoData", false)
+    });
+    Log.Information("[Seed] Reference data verified.");
+}
+catch (Exception ex)
+{
+    // A transient database problem should not stop the process from starting: the readiness
+    // probe reports the dependency as down and the instance is kept out of rotation until it
+    // recovers, which is more useful than a crash loop.
+    Log.Error(ex, "[Seed] Seeding failed; continuing startup. The readiness probe will report database health.");
+}
 
 try
 {
@@ -469,6 +402,7 @@ try
 catch (Exception ex)
 {
     Log.Fatal(ex, "Host terminated unexpectedly");
+    throw;
 }
 finally
 {

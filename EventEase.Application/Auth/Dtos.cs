@@ -18,5 +18,6 @@ namespace EventEase.Application.Auth
         public record UpdateProfileDto(string? name, string? phone, string? city, string? address, string? bio, bool? emailNotifications, bool? inAppNotifications, bool? smsNotifications, string? businessName = null, string? description = null);
         public record UpdatePasswordDto(string currentPassword, string newPassword);
         public record SocialLoginDto(string token, string provider);
+        public record RefreshTokenDto(string refreshToken);
     }
 }
