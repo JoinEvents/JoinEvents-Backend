@@ -1,10 +1,13 @@
 using static EventEase.Application.Auth.Dtos;
+using EventEase.Core.Constants;
 using EventEase.Infrastructure.Data;
 using EventEase.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using EventEase.Core.Entities;
 using System.Diagnostics;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -14,9 +17,105 @@ namespace EventEase.Application.Auth
     public class AuthService : IAuthService
     {
         private readonly EventEaseDbContext _db;
-        //private readonly IOtpService _otp;
         private readonly ITokenService _tokens;
-        public AuthService(EventEaseDbContext db, ITokenService tokens) { _db = db; _tokens = tokens; }
+        private readonly IHttpClientFactory _httpClientFactory;
+        private readonly IConfiguration _config;
+
+        public AuthService(
+            EventEaseDbContext db,
+            ITokenService tokens,
+            IHttpClientFactory httpClientFactory,
+            IConfiguration config)
+        {
+            _db = db;
+            _tokens = tokens;
+            _httpClientFactory = httpClientFactory;
+            _config = config;
+        }
+
+        /// <summary>
+        /// Issues an access token plus a fresh refresh token, storing only the refresh token's
+        /// hash. A database leak therefore does not hand an attacker usable refresh tokens.
+        /// </summary>
+        private async Task<AuthTokens> IssueTokensAsync(User user)
+        {
+            var access = _tokens.CreateAccessToken(user.Id, user.Role);
+            var (refresh, exp) = _tokens.CreateRefreshToken();
+
+            _db.Set<RefreshToken>().Add(new RefreshToken
+            {
+                Id = Guid.NewGuid(),
+                UserId = user.Id,
+                Token = HashToken(refresh),
+                ExpiresAt = exp,
+                Revoked = false
+            });
+            await _db.SaveChangesAsync();
+
+            return new AuthTokens(access, refresh, exp, user);
+        }
+
+        /// <summary>SHA-256 of a refresh token. Refresh tokens are 64 random bytes, so a fast
+        /// hash is appropriate here — unlike passwords, they are not guessable.</summary>
+        private static string HashToken(string token)
+        {
+            return Convert.ToBase64String(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(token)));
+        }
+
+        public async Task<AuthTokens?> RefreshAsync(string refreshToken)
+        {
+            if (string.IsNullOrWhiteSpace(refreshToken)) return null;
+
+            var hash = HashToken(refreshToken);
+            var stored = await _db.Set<RefreshToken>().FirstOrDefaultAsync(t => t.Token == hash);
+            if (stored is null) return null;
+
+            // [SECURITY] Reuse detection: presenting an already-rotated token means the token was
+            // captured. Revoke the whole family rather than issuing another one.
+            if (stored.Revoked)
+            {
+                await RevokeAllAsync(stored.UserId);
+                return null;
+            }
+
+            if (stored.ExpiresAt <= DateTime.UtcNow) return null;
+
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == stored.UserId);
+            if (user is null || !IsLoginAllowed(user)) return null;
+
+            // Rotate: the presented token is spent as part of issuing its replacement.
+            stored.Revoked = true;
+            return await IssueTokensAsync(user);
+        }
+
+        public async Task LogoutAsync(string refreshToken)
+        {
+            if (string.IsNullOrWhiteSpace(refreshToken)) return;
+
+            var hash = HashToken(refreshToken);
+            var stored = await _db.Set<RefreshToken>().FirstOrDefaultAsync(t => t.Token == hash);
+            if (stored is null) return;
+
+            stored.Revoked = true;
+            await _db.SaveChangesAsync();
+        }
+
+        public async Task RevokeAllAsync(Guid userId)
+        {
+            var tokens = await _db.Set<RefreshToken>()
+                .Where(t => t.UserId == userId && !t.Revoked)
+                .ToListAsync();
+
+            foreach (var token in tokens) token.Revoked = true;
+            await _db.SaveChangesAsync();
+        }
+
+        /// <summary>Blocks sign-in for suspended and banned accounts.</summary>
+        private static bool IsLoginAllowed(User user)
+        {
+            var status = user.AccountStatus?.ToLowerInvariant();
+            return status is not ("suspended" or "banned");
+        }
 
         //public async Task<User> RegisterAsync(RegisterDto dto)
         //{
@@ -171,11 +270,7 @@ namespace EventEase.Application.Auth
             _db.Users.Add(user);
             await _db.SaveChangesAsync();
 
-            var access = _tokens.CreateAccessToken(user.Id, user.Role);
-            var (refresh, exp) = _tokens.CreateRefreshToken();
-            _db.Set<RefreshToken>().Add(new RefreshToken { Id = Guid.NewGuid(), UserId = user.Id, Token = refresh, ExpiresAt = exp, Revoked = false });
-            await _db.SaveChangesAsync();
-            return new AuthTokens(access, refresh, exp, user);
+            return await IssueTokensAsync(user);
         }
 
         public async Task<AuthTokens?> LoginAsync(LoginDto dto)
@@ -202,11 +297,18 @@ namespace EventEase.Application.Auth
                 }
             }
 
-            var access = _tokens.CreateAccessToken(user.Id, user.Role);
-            var (refresh, exp) = _tokens.CreateRefreshToken();
-            _db.Set<RefreshToken>().Add(new RefreshToken { Id = Guid.NewGuid(), UserId = user.Id, Token = refresh, ExpiresAt = exp, Revoked = false });
-            await _db.SaveChangesAsync();
-            return new AuthTokens(access, refresh, exp, user);
+            if (!IsLoginAllowed(user)) return null;
+
+            // Actually perform the legacy-hash upgrade the old code only claimed to do: a correct
+            // password stored as unsalted SHA-256 is rewritten as BCrypt on the way through.
+            if (!user.PasswordHash.StartsWith("$2"))
+            {
+                user.PasswordHash = HashPassword(dto.password);
+            }
+
+            user.LastLogin = DateTime.UtcNow;
+
+            return await IssueTokensAsync(user);
         }
 
         public async Task<UserProfileDto?> GetProfileAsync(Guid userId)
@@ -347,70 +449,109 @@ namespace EventEase.Application.Auth
             return true;
         }
 
-        private record GoogleUserInfoDto(string email, string name, string picture);
         private record FacebookUserInfoDto(string email, string name, FacebookPictureDto picture);
         private record FacebookPictureDto(FacebookPictureDataDto data);
         private record FacebookPictureDataDto(string url);
         private record SocialProfile(string email, string name, string? avatar);
 
-        private async Task<SocialProfile?> VerifyGoogleTokenAsync(string token)
+        /// <summary>
+        /// Validates a Google **ID token** and returns the verified profile.
+        ///
+        /// The previous implementation passed a client-supplied *access token* to the userinfo
+        /// endpoint. Any Google OAuth application's access token would satisfy that check, so a
+        /// third-party app could mint a token for a user and sign in as them here (a token
+        /// substitution attack). Validating an ID token and pinning the audience to our own
+        /// client id closes that: the token must have been issued *for this application*.
+        /// </summary>
+        private async Task<SocialProfile?> VerifyGoogleTokenAsync(string idToken)
         {
+            var clientId = _config["Authentication:Google:ClientId"];
+            if (string.IsNullOrWhiteSpace(clientId))
+            {
+                throw new InvalidOperationException(
+                    "Authentication:Google:ClientId is not configured; Google sign-in is disabled.");
+            }
+
             try
             {
-                using (var client = new HttpClient())
+                var settings = new Google.Apis.Auth.GoogleJsonWebSignature.ValidationSettings
                 {
-                    client.DefaultRequestHeaders.Add("User-Agent", "EventEase-Auth-Service");
-                    var response = await client.GetAsync($"https://www.googleapis.com/oauth2/v3/userinfo?access_token={token}");
-                    if (response.IsSuccessStatusCode)
-                    {
-                        var content = await response.Content.ReadAsStringAsync();
-                        var data = JsonSerializer.Deserialize<GoogleUserInfoDto>(content, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                        if (data != null && !string.IsNullOrEmpty(data.email))
-                        {
-                            return new SocialProfile(data.email, data.name, data.picture);
-                        }
-                    }
-                    else
-                    {
-                        Console.WriteLine($"Google token verification failed. Status code: {response.StatusCode}");
-                    }
+                    Audience = new[] { clientId }
+                };
+
+                // Verifies signature, issuer, audience and expiry; throws on failure.
+                var payload = await Google.Apis.Auth.GoogleJsonWebSignature.ValidateAsync(idToken, settings);
+
+                // An unverified email must not be trusted: it would let someone register a Google
+                // account with a victim's address and inherit their platform account.
+                if (payload is null || string.IsNullOrEmpty(payload.Email) || payload.EmailVerified != true)
+                {
+                    return null;
                 }
+
+                return new SocialProfile(payload.Email, payload.Name ?? "Google User", payload.Picture);
             }
-            catch (Exception ex)
+            catch (Google.Apis.Auth.InvalidJwtException)
             {
-                Console.WriteLine($"Exception verifying Google token: {ex.Message}");
+                return null;
             }
-            return null;
         }
 
+        /// <summary>
+        /// Validates a Facebook access token against our own app.
+        ///
+        /// debug_token is the check that matters: it reports which application the token was
+        /// issued to. Without it, a token from any Facebook app would be accepted.
+        /// </summary>
         private async Task<SocialProfile?> VerifyFacebookTokenAsync(string token)
         {
-            try
+            var appId = _config["Authentication:Facebook:AppId"];
+            var appSecret = _config["Authentication:Facebook:AppSecret"];
+            if (string.IsNullOrWhiteSpace(appId) || string.IsNullOrWhiteSpace(appSecret))
             {
-                using (var client = new HttpClient())
-                {
-                    client.DefaultRequestHeaders.Add("User-Agent", "EventEase-Auth-Service");
-                    var response = await client.GetAsync($"https://graph.facebook.com/me?fields=id,name,email,picture.type(large)&access_token={token}");
-                    if (response.IsSuccessStatusCode)
-                    {
-                        var content = await response.Content.ReadAsStringAsync();
-                        var data = JsonSerializer.Deserialize<FacebookUserInfoDto>(content, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                        if (data != null && !string.IsNullOrEmpty(data.email))
-                        {
-                            return new SocialProfile(data.email, data.name, data.picture?.data?.url);
-                        }
-                    }
-                    else
-                    {
-                        Console.WriteLine($"Facebook token verification failed. Status code: {response.StatusCode}");
-                    }
-                }
+                throw new InvalidOperationException(
+                    "Authentication:Facebook credentials are not configured; Facebook sign-in is disabled.");
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Exception verifying Facebook token: {ex.Message}");
-            }
-            return null;
+
+            var client = _httpClientFactory.CreateClient();
+            client.DefaultRequestHeaders.Add("User-Agent", "EventEase-Auth-Service");
+
+            var appAccessToken = $"{appId}|{appSecret}";
+            var debugResponse = await client.GetAsync(
+                $"https://graph.facebook.com/debug_token?input_token={Uri.EscapeDataString(token)}" +
+                $"&access_token={Uri.EscapeDataString(appAccessToken)}");
+
+            if (!debugResponse.IsSuccessStatusCode) return null;
+
+            using var debugDoc = JsonDocument.Parse(await debugResponse.Content.ReadAsStringAsync());
+            if (!debugDoc.RootElement.TryGetProperty("data", out var debugData)) return null;
+
+            var isValid = debugData.TryGetProperty("is_valid", out var validEl) && validEl.GetBoolean();
+            var tokenAppId = debugData.TryGetProperty("app_id", out var appEl) ? appEl.GetString() : null;
+
+            // [SECURITY] The token must be valid AND issued to this application.
+            if (!isValid || !string.Equals(tokenAppId, appId, StringComparison.Ordinal)) return null;
+
+            // appsecret_proof stops a stolen token being replayed against the Graph API from
+            // outside our backend.
+            var proof = Convert.ToHexString(
+                HMACSHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(appSecret),
+                    System.Text.Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
+
+            var profileResponse = await client.GetAsync(
+                $"https://graph.facebook.com/me?fields=id,name,email,picture.type(large)" +
+                $"&access_token={Uri.EscapeDataString(token)}&appsecret_proof={proof}");
+
+            if (!profileResponse.IsSuccessStatusCode) return null;
+
+            var data = JsonSerializer.Deserialize<FacebookUserInfoDto>(
+                await profileResponse.Content.ReadAsStringAsync(),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            if (data is null || string.IsNullOrEmpty(data.email)) return null;
+
+            return new SocialProfile(data.email, data.name, data.picture?.data?.url);
         }
 
         public async Task<AuthTokens> SocialLoginAsync(SocialLoginDto dto)
@@ -482,19 +623,9 @@ namespace EventEase.Application.Auth
                 }
             }
 
-            var access = _tokens.CreateAccessToken(user.Id, user.Role);
-            var (refresh, exp) = _tokens.CreateRefreshToken();
-            _db.Set<RefreshToken>().Add(new RefreshToken 
-            { 
-                Id = Guid.NewGuid(), 
-                UserId = user.Id, 
-                Token = refresh, 
-                ExpiresAt = exp, 
-                Revoked = false 
-            });
-            await _db.SaveChangesAsync();
+            if (!IsLoginAllowed(user)) throw new InvalidOperationException("This account is not permitted to sign in.");
 
-            return new AuthTokens(access, refresh, exp, user);
+            return await IssueTokensAsync(user);
         }
 
         /// <summary>

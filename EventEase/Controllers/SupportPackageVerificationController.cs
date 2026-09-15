@@ -193,7 +193,8 @@ namespace EventEase.Api.Controllers
             catch (Exception ex)
             {
                 Serilog.Log.Error(ex, "Error getting pending packages for support");
-                return StatusCode(500, new { error = "Failed to load pending reviews", details = ex.Message });
+                Serilog.Log.Error(ex, "Failed to load pending package reviews");
+                return StatusCode(500, new { error = "Failed to load pending reviews." });
             }
         }
 
@@ -293,7 +294,8 @@ namespace EventEase.Api.Controllers
             catch (Exception ex)
             {
                 Serilog.Log.Error(ex, "Error verifying package {PackageId}", packageId);
-                return StatusCode(500, new { error = "Verification failed", details = ex.Message });
+                Serilog.Log.Error(ex, "Package verification failed");
+                return StatusCode(500, new { error = "Verification failed. Please try again later." });
             }
         }
     }

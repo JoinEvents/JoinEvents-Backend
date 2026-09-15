@@ -333,7 +333,8 @@ namespace EventEase.Api.Controllers
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { error = "Failed to bulk block dates", details = ex.Message });
+                Serilog.Log.Error(ex, "Failed to bulk block dates");
+                return StatusCode(500, new { error = "Failed to block the selected dates." });
             }
         }
 
@@ -373,7 +374,8 @@ namespace EventEase.Api.Controllers
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { error = "Failed to bulk release dates", details = ex.Message });
+                Serilog.Log.Error(ex, "Failed to bulk release dates");
+                return StatusCode(500, new { error = "Failed to release the selected dates." });
             }
         }
 
@@ -404,7 +406,8 @@ namespace EventEase.Api.Controllers
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { error = "Failed to toggle date blocking", details = ex.Message });
+                Serilog.Log.Error(ex, "Failed to toggle date blocking");
+                return StatusCode(500, new { error = "Failed to update the selected date." });
             }
         }
     }

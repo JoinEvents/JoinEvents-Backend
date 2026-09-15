@@ -143,6 +143,48 @@ namespace EventEase.Infrastructure.Data
             {
                 b.HasIndex(d => new { d.VendorId, d.BlockedDate }).IsUnique();
             });
+
+            // Indexes for the lookups that run on every request path. Without these, booking
+            // lists and refresh-token validation are table scans.
+            modelBuilder.Entity<EventEase.Core.Entities.Booking>(b =>
+            {
+                b.HasIndex(x => x.UserId);
+                b.HasIndex(x => new { x.VendorId, x.EventDate });
+                b.HasIndex(x => x.Status);
+            });
+
+            modelBuilder.Entity<EventEase.Core.Entities.RefreshToken>(b =>
+            {
+                // Refresh tokens are looked up by hash on every refresh; the value stored is a
+                // SHA-256 hash, never the token itself.
+                b.HasIndex(x => x.Token);
+                b.HasIndex(x => x.UserId);
+                b.Property(x => x.Token).HasMaxLength(200);
+            });
+
+            modelBuilder.Entity<EventEase.Core.Entities.Payment>(b =>
+            {
+                // A provider reference identifies exactly one payment; confirmation looks it up
+                // by this value and must not find two. HasFilter is relational-only, so it is
+                // applied only when running against a real database (the tests use in-memory).
+                var providerRefIndex = b.HasIndex(x => x.ProviderReference).IsUnique();
+                if (Database.IsRelational())
+                {
+                    providerRefIndex.HasFilter("[ProviderReference] IS NOT NULL");
+                }
+
+                b.HasIndex(x => x.BookingId);
+            });
+
+            modelBuilder.Entity<EventEase.Core.Entities.User>(b =>
+            {
+                // Login and registration both look users up by email.
+                b.HasIndex(x => x.Email).IsUnique();
+            });
+
+            modelBuilder.Entity<EventEase.Core.Entities.BookingLog>(b => b.HasIndex(x => x.BookingId));
+            modelBuilder.Entity<EventEase.Core.Entities.Notification>(b => b.HasIndex(x => new { x.UserId, x.IsRead }));
+            modelBuilder.Entity<EventEase.Core.Entities.ChatMessage>(b => b.HasIndex(x => x.ThreadId));
         }
     }
 

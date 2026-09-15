@@ -10,18 +10,30 @@ namespace EventEase.Api.Hubs
     public class ChatHub : Hub
     {
         private readonly IMessengerService _messengerService;
+
         public ChatHub(IMessengerService messengerService) => _messengerService = messengerService;
 
         public async Task SendMessage(Guid threadId, string message)
         {
-            var senderId = Guid.Parse(Context.User.FindFirstValue(JwtRegisteredClaimNames.Sub));
-            
+            var senderId = GetUserId();
+            if (senderId == Guid.Empty)
+            {
+                await Clients.Caller.SendAsync("ErrorMessage", "Your session is no longer valid.");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                await Clients.Caller.SendAsync("ErrorMessage", "Message cannot be empty.");
+                return;
+            }
+
+            // SendMessageAsync re-checks participation; returning null covers both "not a member"
+            // and "thread closed", which are deliberately indistinguishable to the caller.
             var result = await _messengerService.SendMessageAsync(threadId, senderId, new Dtos.SendMessageRequest(message));
-            
+
             if (result != null)
             {
-                // In a real app, you might want to send to a group named by threadId
-                // For simplicity, we are sending to all but you should filter by recipients
                 await Clients.Group(threadId.ToString()).SendAsync("ReceiveMessage", result);
             }
             else
@@ -30,14 +42,38 @@ namespace EventEase.Api.Hubs
             }
         }
 
+        /// <summary>
+        /// Subscribes the connection to a thread's broadcasts.
+        ///
+        /// [SECURITY] Membership is verified here. This previously added any caller to any group
+        /// by id, so an authenticated user could listen in on other people's conversations.
+        /// </summary>
         public async Task JoinThread(Guid threadId)
         {
+            var userId = GetUserId();
+            if (userId == Guid.Empty || !await _messengerService.IsParticipantAsync(threadId, userId))
+            {
+                throw new HubException("You do not have access to this conversation.");
+            }
+
             await Groups.AddToGroupAsync(Context.ConnectionId, threadId.ToString());
         }
 
         public async Task LeaveThread(Guid threadId)
         {
             await Groups.RemoveFromGroupAsync(Context.ConnectionId, threadId.ToString());
+        }
+
+        /// <summary>
+        /// Reads the caller's id from the token. Returns Guid.Empty rather than throwing: the
+        /// previous Guid.Parse(...) faulted the connection on any token without a sub claim.
+        /// </summary>
+        private Guid GetUserId()
+        {
+            var value = Context.User?.FindFirstValue(ClaimTypes.NameIdentifier)
+                        ?? Context.User?.FindFirstValue(JwtRegisteredClaimNames.Sub);
+
+            return Guid.TryParse(value, out var id) ? id : Guid.Empty;
         }
     }
 }
