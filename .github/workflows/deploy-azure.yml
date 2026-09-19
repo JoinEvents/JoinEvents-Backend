@@ -1,18 +1,24 @@
-name: Deploy to Azure Container Apps
+name: Deploy to Azure App Service
 
-# Manual by default. Flip the `push` trigger on once a deploy has succeeded by hand.
+# Deploys the API to Azure App Service using a publish profile.
+#
+# IMPORTANT: this deploys whatever is on the branch below. Point it at the branch
+# that actually carries the security hardening — deploying an unhardened branch
+# ships the seeded administrator account and client-controlled booking prices.
 on:
   workflow_dispatch:
-  # push:
-  #   branches: [ main ]
+  push:
+    branches: [ main ]
+
+env:
+  # Copy this from the App Service Overview page. It is the resource name, NOT the
+  # full hostname: for joinevents-api-chiru-xxxx.centralindia-01.azurewebsites.net
+  # the app name is joinevents-api-chiru.
+  AZURE_WEBAPP_NAME: joinevents-api-chiru
+  DOTNET_VERSION: '8.0.x'
 
 permissions:
   contents: read
-  packages: write      # push the image to GitHub Container Registry
-  id-token: write      # federated (passwordless) login to Azure
-
-env:
-  IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
   build-and-deploy:
@@ -21,66 +27,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Build and test before anything is pushed or deployed. A deploy that ships a
-      # broken image costs more time than the two minutes this takes.
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Build and test
-        run: |
-          dotnet restore EventEase.sln
-          dotnet build EventEase.sln -c Release --no-restore
-          dotnet test EventEase.sln -c Release --no-build
+      - name: Restore
+        run: dotnet restore EventEase.sln
 
-      # GitHub Container Registry is free for this; Azure Container Registry is not.
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Build
+        run: dotnet build EventEase.sln -c Release --no-restore
+
+      # Tests run before publish on purpose: a failing build here costs two minutes,
+      # a broken deploy costs an afternoon of guessing at App Service logs.
+      - name: Test
+        run: dotnet test EventEase.sln -c Release --no-build --verbosity normal
+
+      - name: Publish
+        run: dotnet publish EventEase/EventEase.Api.csproj -c Release -o ${{ runner.temp }}/publish --no-build
+
+      - name: Deploy to App Service
+        uses: azure/webapps-deploy@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: ${{ runner.temp }}/publish
 
-      - name: Build and push image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.IMAGE_NAME }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Log in to Azure
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      # The image is private, so the container app needs credentials to pull it.
-      - name: Point the container app at the new image
+      # Liveness only. /health opens a database connection, and polling that keeps a
+      # serverless database awake at the cost of its monthly free allowance.
+      - name: Smoke test
         run: |
-          az containerapp registry set \
-            --name "${{ vars.AZURE_APP_NAME }}" \
-            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-            --server ghcr.io \
-            --username "${{ github.actor }}" \
-            --password "${{ secrets.GITHUB_TOKEN }}"
-
-          az containerapp update \
-            --name "${{ vars.AZURE_APP_NAME }}" \
-            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-            --image "${{ env.IMAGE_NAME }}:${{ github.sha }}"
-
-      - name: Report the URL
-        run: |
-          FQDN=$(az containerapp show \
-            --name "${{ vars.AZURE_APP_NAME }}" \
-            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-            --query properties.configuration.ingress.fqdn --output tsv)
-          echo "### Deployed" >> "$GITHUB_STEP_SUMMARY"
-          echo "API: https://$FQDN" >> "$GITHUB_STEP_SUMMARY"
-          echo "Health: https://$FQDN/health" >> "$GITHUB_STEP_SUMMARY"
+          URL="https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net/health/live"
+          echo "Checking $URL"
+          for i in 1 2 3 4 5 6; do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 90 "$URL" || echo 000)
+            if [ "$CODE" = "200" ]; then
+              echo "App is up."
+              exit 0
+            fi
+            echo "Attempt $i returned $CODE; the app may still be starting."
+            sleep 20
+          done
+          echo "::warning::Liveness check did not return 200. Check App Service log stream."

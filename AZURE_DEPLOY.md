@@ -1,20 +1,89 @@
 # Deploying the JoinEvents API to Azure (free tier)
 
-Target: **Azure Container Apps** for the API, **Azure SQL Database free offer** for the
-database. Both have a standing monthly free allowance — this is not a trial that expires.
-
-| Piece | Free allowance |
-| --- | --- |
-| Container Apps | 180,000 vCPU-seconds, 360,000 GiB-seconds, 2M requests per subscription per month |
-| Azure SQL | 100,000 vCore-seconds, 32 GB data, 32 GB backup per database per month, up to 10 databases |
-| Container image | GitHub Container Registry (free). **Not** Azure Container Registry, which bills from the Basic tier up. |
-
-Nothing here needs a code change: the existing `Dockerfile` already listens on 8080,
-which is what Container Apps expects.
+> **Two paths are documented here.** The **App Service** path below is the one currently
+> wired up in `.github/workflows/deploy-azure.yml`. The **Container Apps** path further
+> down (`azure/provision.sh`) is an alternative that scales to zero; ignore it unless you
+> decide to switch.
 
 ---
 
-## Before you start
+## App Service path
+
+### Required app settings
+
+Set these under **Configuration → Environment variables → App settings**. The first four
+are not optional: the API deliberately refuses to start without them rather than falling
+back to an insecure default, and a missing one shows up as a container that will not boot.
+
+| Setting | Value | If missing |
+| --- | --- | --- |
+| `ConnectionStrings__DefaultConnection` | See below | Startup throws |
+| `Jwt__Key` | 32+ random characters | Startup throws |
+| `AllowedOrigins__0` | The frontend origin, e.g. `https://joinevents.netlify.app` | **Startup throws** |
+| `Payments__AllowSimulator` | `true` | **Startup throws** |
+| `Bootstrap__AdminEmail` | Your email | Admin is not created |
+| `Bootstrap__AdminPassword` | A strong password | Admin is not created |
+
+`AllowedOrigins__0` and `Payments__AllowSimulator` are the two that are easy to miss.
+The CORS guard refuses to fall back to a default origin list in Production, and the
+payments guard refuses to let the simulator gateway be mistaken for a real payment
+integration — setting it to `true` is how you say "yes, I know payments do not work yet".
+
+### Connection string
+
+Add `Connect Timeout=60` to whatever the portal gives you:
+
+```
+Server=tcp:<server>.database.windows.net,1433;Initial Catalog=<db>;User ID=<admin>;Password=<password>;Encrypt=True;TrustServerCertificate=False;Connect Timeout=60;
+```
+
+A paused serverless database takes around a minute to resume, which is longer than the
+15 second default — without this the first request after an idle period fails before the
+database has finished waking.
+
+### Turn off the App Service health check, or point it at `/health/live`
+
+App Service's built-in **Health check** feature polls a path roughly every minute. If you
+point it at `/health`, it opens a database connection every time, keeps the serverless
+database permanently awake and burns the whole monthly free allowance in about two days.
+Either leave the feature disabled or set the path to `/health/live`, which touches nothing.
+
+### Migrations
+
+Run from your machine — they do not run at startup:
+
+```bash
+export ConnectionStrings__DefaultConnection='<the string above>'
+dotnet ef migrations add AddOperationalIndexes --project EventEase.Infrastructure --startup-project EventEase
+dotnet ef database update --project EventEase.Infrastructure --startup-project EventEase
+```
+
+The `migrations add` step is needed once: the hardening work changed the EF model and no
+migration was committed for it.
+
+### Deploy
+
+1. App Service **Overview → Get publish profile**, save the file's contents as the repo
+   secret `AZURE_WEBAPP_PUBLISH_PROFILE`.
+2. Check `AZURE_WEBAPP_NAME` at the top of `.github/workflows/deploy-azure.yml` matches
+   your App Service resource name (the hostname's first segment, not the whole hostname).
+3. Push, or run the workflow manually.
+
+### Checking it
+
+- `https://<hostname>/health/live` — the process is up.
+- `https://<hostname>/health` — the database is reachable too. Expect the first call after
+  idle to take up to a minute while the database resumes.
+- Swagger is disabled in Production by design.
+
+If the app will not start, **App Service → Log stream** shows the startup exception, and
+the guards above name exactly what is missing.
+
+---
+
+## Container Apps path (alternative)
+
+### Before you start
 
 You need the Azure CLI and an Azure subscription:
 
@@ -26,7 +95,7 @@ az extension add --name containerapp --upgrade
 
 ---
 
-## Step 1 — Pick a region
+### Step 1 — Pick a region
 
 Use one region for everything, so the API and database are not talking across the
 planet. `centralindia` is the sensible default for Indian users.
@@ -37,7 +106,7 @@ region for Container Apps.
 
 ---
 
-## Step 2 — Create the database (portal)
+### Step 2 — Create the database (portal)
 
 Do this one in the **portal**, not the CLI: the free offer is a checkbox in the create
 flow, and the CLI flag names for it have moved between `az` versions.
@@ -66,7 +135,7 @@ covers the `40613` "database unavailable" error Azure returns while resuming.
 
 ---
 
-## Step 3 — Provision the API
+### Step 3 — Provision the API
 
 ```bash
 export LOCATION='centralindia'
@@ -86,7 +155,7 @@ Keep `JWT_KEY` somewhere safe — rotating it signs every existing user out.
 
 ---
 
-## Step 4 — Apply the database schema
+### Step 4 — Apply the database schema
 
 Migrations do **not** run at startup (`Database:MigrateOnStartup` defaults to false),
 because EF Core's `Migrate()` is not safe to run from several instances at once. Apply
@@ -111,7 +180,7 @@ any exist —
 
 ---
 
-## Step 5 — Wire up deploys from GitHub
+### Step 5 — Wire up deploys from GitHub
 
 Create a federated credential so Actions can log in without a stored password:
 
@@ -154,7 +223,7 @@ Once a manual run has succeeded, uncomment the `push` trigger at the top of
 
 ---
 
-## Step 6 — Point the frontend at it
+### Step 6 — Point the frontend at it
 
 The provisioning script prints the API URL. Put it in the frontend's
 `src/environments/environment.ts` as `apiUrl` (with the `/api/v1` suffix), then re-run
@@ -164,7 +233,7 @@ badly.
 
 ---
 
-## Three things that will cost you the free tier
+### Three things that will cost you the free tier
 
 **Never point an uptime monitor at `/health`.** It opens a database connection. A monitor
 hitting it every minute keeps the serverless database permanently awake, which burns the
@@ -184,7 +253,7 @@ is the setting that turns a mistake into a bill.
 
 ---
 
-## Budget the database uptime
+### Budget the database uptime
 
 The free grant works out to about **55 hours of active database time per month** at the
 0.5 vCore minimum — roughly 1.8 hours a day. That is plenty for development and demos, and
