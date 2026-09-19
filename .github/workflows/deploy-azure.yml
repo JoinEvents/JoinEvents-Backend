@@ -1,0 +1,86 @@
+name: Deploy to Azure Container Apps
+
+# Manual by default. Flip the `push` trigger on once a deploy has succeeded by hand.
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [ main ]
+
+permissions:
+  contents: read
+  packages: write      # push the image to GitHub Container Registry
+  id-token: write      # federated (passwordless) login to Azure
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build and test before anything is pushed or deployed. A deploy that ships a
+      # broken image costs more time than the two minutes this takes.
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build and test
+        run: |
+          dotnet restore EventEase.sln
+          dotnet build EventEase.sln -c Release --no-restore
+          dotnet test EventEase.sln -c Release --no-build
+
+      # GitHub Container Registry is free for this; Azure Container Registry is not.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # The image is private, so the container app needs credentials to pull it.
+      - name: Point the container app at the new image
+        run: |
+          az containerapp registry set \
+            --name "${{ vars.AZURE_APP_NAME }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --server ghcr.io \
+            --username "${{ github.actor }}" \
+            --password "${{ secrets.GITHUB_TOKEN }}"
+
+          az containerapp update \
+            --name "${{ vars.AZURE_APP_NAME }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --image "${{ env.IMAGE_NAME }}:${{ github.sha }}"
+
+      - name: Report the URL
+        run: |
+          FQDN=$(az containerapp show \
+            --name "${{ vars.AZURE_APP_NAME }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --query properties.configuration.ingress.fqdn --output tsv)
+          echo "### Deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "API: https://$FQDN" >> "$GITHUB_STEP_SUMMARY"
+          echo "Health: https://$FQDN/health" >> "$GITHUB_STEP_SUMMARY"
