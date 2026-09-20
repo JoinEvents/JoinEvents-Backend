@@ -35,6 +35,14 @@ on:
     secrets:
       AZURE_SQL_CONNECTION_STRING:
         required: false
+  # A push that changes the migrations produces the script for that branch, so
+  # it can be reviewed, or run by hand, without waiting for a merge. Writing to
+  # the database from a branch is deliberately not possible here: its migration
+  # set is not necessarily the one main deploys. See the apply step's condition.
+  push:
+    paths:
+      - 'EventEase.Infrastructure/Migrations/**'
+      - '.github/workflows/migrate-database.yml'
 
 permissions:
   contents: read
@@ -88,7 +96,7 @@ jobs:
           fi
 
       - name: List migrations the database is missing
-        if: steps.secret.outputs.present == 'true'
+        if: steps.secret.outputs.present == 'true' && github.event_name != 'push'
         env:
           ConnectionStrings__DefaultConnection: ${{ secrets.AZURE_SQL_CONNECTION_STRING }}
         run: |
@@ -96,8 +104,12 @@ jobs:
             --project EventEase.Infrastructure \
             --startup-project EventEase
 
+      # Only a deploy of main or a deliberate dispatch may write to the database.
       - name: Apply the migrations
-        if: steps.secret.outputs.present == 'true' && inputs.apply != false
+        if: >-
+          steps.secret.outputs.present == 'true'
+          && inputs.apply != false
+          && github.event_name != 'push'
         env:
           ConnectionStrings__DefaultConnection: ${{ secrets.AZURE_SQL_CONNECTION_STRING }}
         run: |
@@ -107,7 +119,7 @@ jobs:
 
       - name: Summary
         env:
-          APPLIED: ${{ steps.secret.outputs.present == 'true' && inputs.apply != false }}
+          APPLIED: ${{ steps.secret.outputs.present == 'true' && inputs.apply != false && github.event_name != 'push' }}
         run: |
           {
             echo "### Database migration"
