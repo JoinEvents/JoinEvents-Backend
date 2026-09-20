@@ -35,9 +35,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Guards against the class of problem this repository already had: credentials and
-      # signing keys committed to source control.
+      # Guards against the class of problem this repository already had: credentials
+      # and signing keys committed to source control.
+      #
+      # The gitleaks GitHub Action requires a paid licence for organization repos, so
+      # this runs the MIT-licensed CLI directly instead. The version is resolved at run
+      # time so this does not rot.
+      #
+      # --no-git scans the working tree rather than every commit. A SQL password was
+      # committed in EventEaseDbContextFactory.cs and is still present in history; that
+      # credential must be rotated rather than scrubbed, and scanning history here would
+      # fail every build forever for a leak that cannot be un-published.
       - name: Scan for committed secrets
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION=$(curl -sSf https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
+            | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
+          echo "Using gitleaks v$VERSION"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          # -v prints each finding (file, line, rule) so a failure is actionable;
+          # --redact keeps the secret value itself out of the build log.
+          ./gitleaks detect --source . --no-git --no-banner --redact -v --exit-code 1

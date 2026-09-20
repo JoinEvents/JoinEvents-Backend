@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using EventEase.Application.Auth;
 using EventEase.Core.Entities;
 using EventEase.Infrastructure.Data;
@@ -31,8 +32,8 @@ namespace EventEase.Tests
             {
                 Issuer = "EventEase",
                 Audience = "EventEaseClients",
-                // Test-only signing material; 32+ bytes so it satisfies HMAC-SHA256.
-                Key = "test-signing-key-that-is-long-enough-1234567890",
+                // Generated per run rather than hardcoded — see TestWebApplicationFactory.
+                Key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(48)),
                 AccessTokenMinutes = 60,
                 RefreshTokenDays = 7
             });
