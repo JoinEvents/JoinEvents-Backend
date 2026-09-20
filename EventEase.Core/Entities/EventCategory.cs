@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 
 namespace EventEase.Core.Entities
@@ -41,7 +42,7 @@ namespace EventEase.Core.Entities
         public string? Description { get; set; }
 
         /// <summary>
-        /// Comma-separated popular service names stored as JSON array.
+        /// Popular service names, stored as a JSON array.
         /// e.g. ["Venue","Catering","Decoration"]
         /// </summary>
         public string PopularServicesJson { get; set; } = "[]";
@@ -53,13 +54,46 @@ namespace EventEase.Core.Entities
 
         // ── Helper (not mapped) ────────────────────────────────────────────
 
+        /// <summary>
+        /// The stored JSON as a list.
+        ///
+        /// A row whose column does not hold a JSON array — one written before this was JSON,
+        /// or edited by hand — would otherwise throw out of a property getter, and the public
+        /// category listing would answer 500 for every caller because of one bad row. A
+        /// comma-separated value is read as the list it plainly is; anything else reads as
+        /// empty, which shows a category without its service tags rather than no categories
+        /// at all.
+        /// </summary>
         [System.ComponentModel.DataAnnotations.Schema.NotMapped]
         public List<string> PopularServices
         {
-            get => string.IsNullOrEmpty(PopularServicesJson)
-                ? new List<string>()
-                : JsonSerializer.Deserialize<List<string>>(PopularServicesJson) ?? new List<string>();
+            get => Parse(PopularServicesJson);
             set => PopularServicesJson = JsonSerializer.Serialize(value ?? new List<string>());
+        }
+
+        private static List<string> Parse(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return new List<string>();
+
+            var trimmed = json.Trim();
+
+            // Anything that opens like JSON is read as JSON or not at all: splitting a
+            // malformed object on its commas would invent service names out of syntax.
+            if (trimmed.StartsWith('[') || trimmed.StartsWith('{'))
+            {
+                try
+                {
+                    return JsonSerializer.Deserialize<List<string>>(trimmed) ?? new List<string>();
+                }
+                catch (JsonException)
+                {
+                    return new List<string>();
+                }
+            }
+
+            return trimmed
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
         }
     }
 }

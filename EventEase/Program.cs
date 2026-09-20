@@ -60,9 +60,9 @@ if (string.IsNullOrWhiteSpace(connectionString) || connectionString.Contains("${
         "ConnectionStrings__DefaultConnection environment variable.");
 }
 
-var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
-                     ?? Array.Empty<string>();
-if (allowedOrigins.Length == 0)
+var configuredOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
+                        ?? Array.Empty<string>();
+if (configuredOrigins.Length == 0)
 {
     if (builder.Environment.IsProduction())
     {
@@ -70,8 +70,25 @@ if (allowedOrigins.Length == 0)
             "[SECURITY] No AllowedOrigins configured. Set the AllowedOrigins array so CORS " +
             "does not fall back to an unintended default.");
     }
-    allowedOrigins = new[] { "http://localhost:4200" };
+    configuredOrigins = new[] { "http://localhost:4200" };
 }
+
+// The Capacitor mobile app's WebView is not served over the network, so it has no
+// deployable origin to configure: Android serves the bundle from https://localhost and
+// iOS from capacitor://localhost, and those are the Origin headers the backend sees.
+// They are appended rather than left to configuration because a deployment that sets
+// only AllowedOrigins__0 (as azure/provision.sh does) would otherwise silently break
+// every request from the app at the CORS preflight, which in JavaScript is
+// indistinguishable from the server being down.
+//
+// [SECURITY] These name the app's own WebView, not a site an attacker can serve from:
+// a page on the public internet cannot claim either origin.
+string[] mobileAppOrigins = { "https://localhost", "capacitor://localhost" };
+
+var allowedOrigins = configuredOrigins
+    .Concat(mobileAppOrigins)
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToArray();
 
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
 
@@ -286,16 +303,24 @@ app.UseExceptionHandler(errorApp =>
     errorApp.Run(async context =>
     {
         var feature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerPathFeature>();
-        Log.Error(feature?.Error, "Unhandled exception while processing {Path}", context.Request.Path);
+
+        // The client is told nothing about the failure, so without a shared identifier a
+        // reported 500 cannot be matched to the exception that caused it. TraceIdentifier
+        // is already on every log line written for this request.
+        var traceId = context.TraceIdentifier;
+        Log.Error(feature?.Error, "Unhandled exception while processing {Path} (trace {TraceId})",
+            context.Request.Path, traceId);
 
         context.Response.StatusCode = StatusCodes.Status500InternalServerError;
         context.Response.ContentType = "application/json";
 
-        // [SECURITY] Never expose internal exception details to clients.
+        // [SECURITY] Never expose internal exception details to clients — the trace id is an
+        // opaque per-request handle, not a description of what went wrong.
         await context.Response.WriteAsJsonAsync(new
         {
             error = "Internal Server Error",
-            message = "An unexpected error occurred. Please try again later."
+            message = "An unexpected error occurred. Please try again later.",
+            traceId
         });
     });
 });
@@ -350,7 +375,26 @@ app.MapHealthChecks("/health/live", new Microsoft.AspNetCore.Diagnostics.HealthC
 }).AllowAnonymous();
 app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
-    Predicate = check => check.Tags.Contains("ready")
+    Predicate = check => check.Tags.Contains("ready"),
+    // The default writer emits the overall status and nothing else, so a probe that is
+    // merely degraded is indistinguishable from a healthy one. Each check's description
+    // says which dependency is in what state, which is what someone opening /health in a
+    // browser actually needs. Descriptions are written for this audience and carry no
+    // internal detail — see DatabaseHealthCheck.
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsJsonAsync(new
+        {
+            status = report.Status.ToString(),
+            checks = report.Entries.Select(entry => new
+            {
+                name = entry.Key,
+                status = entry.Value.Status.ToString(),
+                description = entry.Value.Description
+            })
+        });
+    }
 }).AllowAnonymous();
 
 // ---------------------------------------------------------------------------
