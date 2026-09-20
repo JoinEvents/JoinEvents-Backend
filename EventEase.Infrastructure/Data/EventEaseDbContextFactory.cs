@@ -28,10 +28,15 @@ namespace EventEase.Infrastructure.Data
 
             var connectionString = configuration.GetConnectionString("DefaultConnection");
 
+            // [SECURITY] No hardcoded fallback. This previously fell back to a connection
+            // string containing a real password, which was committed to the repository.
             if (string.IsNullOrWhiteSpace(connectionString) || connectionString.Contains("${"))
             {
-                connectionString = Environment.GetEnvironmentVariable("EVENT_EASE_DB_CONNECTION")
-                                  ?? "Server=CHIRU\\SQLEXPRESS;Database=EventEaseDb;User Id=sa;Password=Chiru5512#;TrustServerCertificate=True;";
+                throw new InvalidOperationException(
+                    "No database connection string is configured for design-time use. Set the " +
+                    "ConnectionStrings__DefaultConnection environment variable before running " +
+                    "'dotnet ef', for example:\n" +
+                    "  export ConnectionStrings__DefaultConnection='Server=...;Database=...;...'");
             }
 
             var optionsBuilder = new DbContextOptionsBuilder<EventEaseDbContext>();

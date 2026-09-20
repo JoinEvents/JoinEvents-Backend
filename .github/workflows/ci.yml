@@ -41,6 +41,11 @@ jobs:
       # The gitleaks GitHub Action requires a paid licence for organization repos, so
       # this runs the MIT-licensed CLI directly instead. The version is resolved at run
       # time so this does not rot.
+      #
+      # --no-git scans the working tree rather than every commit. A SQL password was
+      # committed in EventEaseDbContextFactory.cs and is still present in history; that
+      # credential must be rotated rather than scrubbed, and scanning history here would
+      # fail every build forever for a leak that cannot be un-published.
       - name: Scan for committed secrets
         run: |
           set -euo pipefail
@@ -49,4 +54,4 @@ jobs:
           echo "Using gitleaks v$VERSION"
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
             | tar -xz gitleaks
-          ./gitleaks detect --source . --no-banner --redact --exit-code 1
+          ./gitleaks detect --source . --no-git --no-banner --redact --exit-code 1

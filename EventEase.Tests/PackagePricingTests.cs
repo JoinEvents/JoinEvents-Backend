@@ -13,12 +13,12 @@ using Xunit;
 
 namespace EventEase.Tests
 {
-    public class PackagePricingTests : IClassFixture<WebApplicationFactory<global::Program>>
+    public class PackagePricingTests : IClassFixture<TestWebApplicationFactory>
     {
-        private readonly WebApplicationFactory<global::Program> _factory;
+        private readonly TestWebApplicationFactory _factory;
         private readonly HttpClient _client;
 
-        public PackagePricingTests(WebApplicationFactory<global::Program> factory)
+        public PackagePricingTests(TestWebApplicationFactory factory)
         {
             _factory = factory;
             _client = factory.CreateClient();
