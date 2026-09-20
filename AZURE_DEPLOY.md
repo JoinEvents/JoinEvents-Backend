@@ -182,6 +182,12 @@ Every run also attaches `migration.sql` — an idempotent script, safe to run ag
 database in any state and safe to re-run. Without the secret that artifact is the whole
 output: download it from the run and execute it in the Azure Portal query editor.
 
+If the deployed database is already behind and you want it caught up now, without
+waiting on a secret or a firewall rule, set `Database__MigrateOnStartup` to `true` in the
+App Service's environment variables and restart it. Startup then logs the pending count
+and applies them. Turn it back off afterwards: `Migrate()` is not safe to run from several
+instances at once, so leaving it on makes scaling out a race.
+
 To apply them from your own machine instead:
 
 ```bash
