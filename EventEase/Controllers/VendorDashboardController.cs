@@ -1,3 +1,4 @@
+using EventEase.Core.Constants;
 using EventEase.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -16,6 +17,35 @@ namespace EventEase.Api.Controllers
         public VendorDashboardController(EventEaseDbContext db)
         {
             _db = db;
+        }
+
+        /// <summary>Statuses where the vendor has earned the money, not merely been asked.</summary>
+        private static readonly string[] Earned =
+        {
+            BookingStatuses.Paid, BookingStatuses.Confirmed,
+            BookingStatuses.Completed, BookingStatuses.Settled
+        };
+
+        private static readonly string[] Cancelled =
+        {
+            BookingStatuses.Cancelled, BookingStatuses.Rejected
+        };
+
+        /// <summary>
+        /// A percentage the vendor can act on: each step is something the app links to,
+        /// so "80% complete" always has a visible next step behind it.
+        /// </summary>
+        private static int ProfileCompletion(Core.Entities.Vendor vendor, int activePackages)
+        {
+            var steps = new[]
+            {
+                !string.IsNullOrWhiteSpace(vendor.BusinessName),
+                !string.IsNullOrWhiteSpace(vendor.Description),
+                !string.IsNullOrWhiteSpace(vendor.Location),
+                vendor.IsValidated,
+                activePackages > 0
+            };
+            return (int)Math.Round(steps.Count(done => done) * 100.0 / steps.Length);
         }
 
         private Guid GetUserId()
@@ -48,11 +78,58 @@ namespace EventEase.Api.Controllers
                 await _db.SaveChangesAsync();
             }
 
+            var bookings = await _db.Bookings
+                .Where(b => b.VendorId == vendor.Id)
+                .ToListAsync();
+
+            // Revenue counts money the vendor has actually earned, so a booking that
+            // was only ever requested does not inflate it.
+            var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+            var monthlyRevenue = bookings
+                .Where(b => Earned.Contains(b.Status, StringComparer.OrdinalIgnoreCase))
+                .Where(b => b.EventDate >= monthStart)
+                .Sum(b => b.TotalAmount);
+
+            var pendingRequests = bookings
+                .Count(b => string.Equals(b.Status, BookingStatuses.Pending, StringComparison.OrdinalIgnoreCase));
+
+            var reviews = await _db.Reviews
+                .Where(r => r.VendorId == vendor.Id && r.Status != "removed")
+                .ToListAsync();
+
+            var activePackages = await _db.Packages
+                .CountAsync(p => p.VendorId == vendor.Id && p.IsActive);
+
+            // The next few confirmed jobs, which is what the vendor is looking for.
+            var upcoming = bookings
+                .Where(b => b.EventDate >= DateTime.UtcNow.Date)
+                .Where(b => !Cancelled.Contains(b.Status, StringComparer.OrdinalIgnoreCase))
+                .OrderBy(b => b.EventDate)
+                .Take(5)
+                .ToList();
+
+            var customerIds = upcoming.Select(b => b.UserId).Distinct().ToList();
+            var customerNames = await _db.Users
+                .Where(u => customerIds.Contains(u.Id))
+                .ToDictionaryAsync(u => u.Id, u => u.Name);
+
             var dashboard = new
             {
-                vendorName = vendor.BusinessName,
-                isVerified = vendor.IsValidated,
-                recentRequests = new List<object>(), 
+                totalBookings = bookings.Count,
+                pendingRequests,
+                monthlyRevenue,
+                rating = reviews.Count > 0 ? Math.Round(reviews.Average(r => r.Rating), 1) : 0d,
+                totalReviews = reviews.Count,
+                activePackages,
+                profileCompletion = ProfileCompletion(vendor, activePackages),
+                verificationStatus = vendor.IsValidated ? "verified" : "pending",
+                upcomingEvents = upcoming.Select(b => new
+                {
+                    id = b.Id,
+                    name = b.EventName,
+                    date = b.EventDate,
+                    customerName = customerNames.TryGetValue(b.UserId, out var name) ? name : "Customer"
+                })
             };
             return Ok(dashboard);
         }
@@ -163,21 +240,10 @@ namespace EventEase.Api.Controllers
             // Fetch average rating trend
             var reviews = await _db.Reviews.Where(r => r.VendorId == vendor.Id && r.Status != "removed").ToListAsync();
             
-            // Average rating trend (for simplicity, we'll return a trend towards current average or constant monthly)
-            var avgRating = reviews.Any() ? Math.Round(reviews.Average(r => r.Rating), 1) : 4.8;
+            // Average rating trend, flat at the current average until per-month history exists.
+            // A vendor with no reviews has no rating. Showing 4.8 invented one.
+            var avgRating = reviews.Any() ? Math.Round(reviews.Average(r => r.Rating), 1) : 0d;
             var averageRatingTrend = Enumerable.Repeat((double)avgRating, 12).ToArray();
-
-            // Seed fallback values if brand new vendor
-            if (totalEarnings == 0)
-            {
-                totalEarnings = 850000m;
-                monthlyEarnings = new decimal[] { 40000, 50000, 65000, 45000, 80000, 95000, 70000, 110000, 85000, 120000, 150000, 180000 };
-                bookingCountByStatus["pending"] = 4;
-                bookingCountByStatus["accepted"] = 3;
-                bookingCountByStatus["declined"] = 1;
-                bookingCountByStatus["completed"] = 87;
-                averageRatingTrend = new double[] { 4.5, 4.6, 4.6, 4.7, 4.7, 4.8, 4.8, 4.8, 4.9, 4.8, 4.9, 4.8 };
-            }
 
             return Ok(new
             {
