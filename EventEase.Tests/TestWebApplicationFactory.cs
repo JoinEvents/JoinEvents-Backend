@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using EventEase.Infrastructure.Data;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -28,8 +29,11 @@ namespace EventEase.Tests
             // fixture is used, so these are in place by the time the host is built.
             Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Development");
 
-            // Test-only signing material, long enough to satisfy the HMAC-SHA256 length check.
-            Environment.SetEnvironmentVariable("Jwt__Key", "integration-test-signing-key-at-least-32-bytes-long");
+            // Generated per run rather than hardcoded: a literal key here is indistinguishable
+            // from a real leaked one to a secret scanner, and fresh material per run is closer
+            // to how the app is actually configured.
+            Environment.SetEnvironmentVariable(
+                "Jwt__Key", Convert.ToBase64String(RandomNumberGenerator.GetBytes(48)));
             Environment.SetEnvironmentVariable("Jwt__Issuer", "EventEase");
             Environment.SetEnvironmentVariable("Jwt__Audience", "EventEaseClients");
 
