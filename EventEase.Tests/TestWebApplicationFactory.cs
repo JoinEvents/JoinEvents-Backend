@@ -2,7 +2,6 @@ using EventEase.Infrastructure.Data;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace EventEase.Tests
@@ -10,43 +9,48 @@ namespace EventEase.Tests
     /// <summary>
     /// Boots the real API for integration tests against an in-memory database.
     ///
-    /// The plain <see cref="WebApplicationFactory{T}"/> cannot start this app any more: startup
-    /// deliberately fails when the JWT key or connection string is missing, rather than falling
-    /// back to an insecure default. This supplies test values for both and swaps SQL Server for
-    /// the in-memory provider, so tests need no database.
+    /// The plain <see cref="WebApplicationFactory{T}"/> cannot start this app any more:
+    /// startup deliberately fails when the JWT key or connection string is missing, rather
+    /// than falling back to an insecure default.
     /// </summary>
     public class TestWebApplicationFactory : WebApplicationFactory<global::Program>
     {
         private readonly string _databaseName = Guid.NewGuid().ToString();
 
+        static TestWebApplicationFactory()
+        {
+            // These have to be environment variables, not ConfigureAppConfiguration values.
+            // Program.cs is a minimal-hosting app that reads builder.Configuration in its
+            // top-level statements — before WebApplicationFactory's configuration callbacks
+            // are applied — so anything supplied through the builder arrives too late and
+            // startup still throws. WebApplication.CreateBuilder reads environment variables
+            // as part of its default configuration, and a static constructor runs before the
+            // fixture is used, so these are in place by the time the host is built.
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Development");
+
+            // Test-only signing material, long enough to satisfy the HMAC-SHA256 length check.
+            Environment.SetEnvironmentVariable("Jwt__Key", "integration-test-signing-key-at-least-32-bytes-long");
+            Environment.SetEnvironmentVariable("Jwt__Issuer", "EventEase");
+            Environment.SetEnvironmentVariable("Jwt__Audience", "EventEaseClients");
+
+            // Never used to connect — the provider is replaced below — but startup validates
+            // that a connection string is present.
+            Environment.SetEnvironmentVariable(
+                "ConnectionStrings__DefaultConnection",
+                "Server=(localdb)\\test;Database=EventEaseTests;Trusted_Connection=True;");
+
+            Environment.SetEnvironmentVariable("Database__MigrateOnStartup", "false");
+            Environment.SetEnvironmentVariable("Database__SeedDemoData", "false");
+        }
+
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
-            // Development skips the production-only guards (CORS origins must be configured,
-            // and the simulator payment gateway is refused) that are irrelevant here.
             builder.UseEnvironment("Development");
-
-            builder.ConfigureAppConfiguration((_, config) =>
-            {
-                config.AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    // Never used to connect — the provider is replaced below — but startup
-                    // validates that one is present.
-                    ["ConnectionStrings:DefaultConnection"] =
-                        "Server=(localdb)\\test;Database=EventEaseTests;Trusted_Connection=True;",
-
-                    // Test-only signing material, long enough to satisfy the HMAC-SHA256 check.
-                    ["Jwt:Key"] = "integration-test-signing-key-at-least-32-bytes-long",
-                    ["Jwt:Issuer"] = "EventEase",
-                    ["Jwt:Audience"] = "EventEaseClients",
-
-                    ["Database:MigrateOnStartup"] = "false",
-                    ["Database:SeedDemoData"] = "false"
-                });
-            });
 
             builder.ConfigureServices(services =>
             {
-                // Drop the SQL Server registration and everything that hangs off it.
+                // Drop the SQL Server registration and everything hanging off it, then point
+                // the context at an in-memory store so the tests need no database.
                 var toRemove = services
                     .Where(d => d.ServiceType == typeof(DbContextOptions<EventEaseDbContext>)
                              || d.ServiceType == typeof(DbContextOptions)
@@ -60,12 +64,6 @@ namespace EventEase.Tests
 
                 services.AddDbContext<EventEaseDbContext>(options =>
                     options.UseInMemoryDatabase(_databaseName));
-
-                // Create the schema once so the first request does not race on it.
-                using var provider = services.BuildServiceProvider();
-                using var scope = provider.CreateScope();
-                scope.ServiceProvider.GetRequiredService<EventEaseDbContext>()
-                     .Database.EnsureCreated();
             });
         }
     }

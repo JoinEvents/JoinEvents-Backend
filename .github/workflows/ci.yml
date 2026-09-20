@@ -54,4 +54,6 @@ jobs:
           echo "Using gitleaks v$VERSION"
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
             | tar -xz gitleaks
-          ./gitleaks detect --source . --no-git --no-banner --redact --exit-code 1
+          # -v prints each finding (file, line, rule) so a failure is actionable;
+          # --redact keeps the secret value itself out of the build log.
+          ./gitleaks detect --source . --no-git --no-banner --redact -v --exit-code 1
