@@ -1,0 +1,146 @@
+# Applies EF Core migrations to a deployed database.
+#
+# This step did not exist, which is why the Azure database was never migrated:
+# AZURE_DEPLOY.md asked a developer to run `dotnet ef database update` from their
+# own machine, the deploy workflow shipped the code without it, and nothing
+# noticed the two had diverged. /health only opened a connection, so it stayed
+# green while every endpoint that touched a missing table answered 500.
+#
+# Two outputs, so a missing secret or a closed firewall cannot leave you stuck:
+#
+#   * migration.sql is generated and attached to every run. It is idempotent —
+#     each migration is wrapped in a check against __EFMigrationsHistory — so it
+#     is safe to run against a database in any state, including one already up
+#     to date, and safe to run twice. Paste it into the Azure Portal query
+#     editor if the automated path below is not set up.
+#   * The migration is applied directly when AZURE_SQL_CONNECTION_STRING is set.
+#
+# Called by the deploy workflow before the app is deployed, so new code never
+# starts against an old schema.
+
+name: Database migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Apply to the database (off = only produce migration.sql)'
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      apply:
+        type: boolean
+        default: true
+    secrets:
+      AZURE_SQL_CONNECTION_STRING:
+        required: false
+  # A push that changes the migrations produces the script for that branch, so
+  # it can be reviewed, or run by hand, without waiting for a merge. Writing to
+  # the database from a branch is deliberately not possible here: its migration
+  # set is not necessarily the one main deploys. See the apply step's condition.
+  push:
+    paths:
+      - 'EventEase.Infrastructure/Migrations/**'
+      - '.github/workflows/migrate-database.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install dotnet-ef
+        run: dotnet tool install --global dotnet-ef --version 8.*
+
+      # Script generation reads the migration assembly and never opens a
+      # connection, but EventEaseDbContextFactory insists on a connection string
+      # before it will hand back a context. This one is never dialled.
+      - name: Generate the idempotent migration script
+        env:
+          ConnectionStrings__DefaultConnection: 'Server=script-generation-only;Database=none;'
+        run: |
+          dotnet ef migrations script \
+            --idempotent \
+            --project EventEase.Infrastructure \
+            --startup-project EventEase \
+            --output migration.sql
+          echo "Generated $(wc -l < migration.sql) lines of SQL."
+
+      - name: Upload the migration script
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-sql
+          path: migration.sql
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Check whether the database can be reached
+        id: secret
+        env:
+          CONNECTION_STRING: ${{ secrets.AZURE_SQL_CONNECTION_STRING }}
+        run: |
+          if [ -n "$CONNECTION_STRING" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: List migrations the database is missing
+        if: steps.secret.outputs.present == 'true' && github.event_name != 'push'
+        env:
+          ConnectionStrings__DefaultConnection: ${{ secrets.AZURE_SQL_CONNECTION_STRING }}
+        run: |
+          dotnet ef migrations list \
+            --project EventEase.Infrastructure \
+            --startup-project EventEase
+
+      # Only a deploy of main or a deliberate dispatch may write to the database.
+      - name: Apply the migrations
+        if: >-
+          steps.secret.outputs.present == 'true'
+          && inputs.apply != false
+          && github.event_name != 'push'
+        env:
+          ConnectionStrings__DefaultConnection: ${{ secrets.AZURE_SQL_CONNECTION_STRING }}
+        run: |
+          dotnet ef database update \
+            --project EventEase.Infrastructure \
+            --startup-project EventEase
+
+      - name: Summary
+        env:
+          APPLIED: ${{ steps.secret.outputs.present == 'true' && inputs.apply != false && github.event_name != 'push' }}
+        run: |
+          {
+            echo "### Database migration"
+            echo ""
+            if [ "$APPLIED" = "true" ]; then
+              echo "Migrations were applied. \`/health\` should now report \`Healthy\`;"
+              echo "while any are outstanding it reports \`Degraded\` and names the count."
+            else
+              echo "**Nothing was applied to a database.** Either the"
+              echo "\`AZURE_SQL_CONNECTION_STRING\` secret is not set on this repository,"
+              echo "or this run was started with *apply* switched off."
+              echo ""
+              echo "To apply the schema by hand right now: download **migration-sql**"
+              echo "from the Artifacts section of this run, open the Azure Portal →"
+              echo "your SQL database → **Query editor**, and run the contents of"
+              echo "\`migration.sql\`. It is idempotent, so it applies only what is"
+              echo "missing and is safe to re-run."
+              echo ""
+              echo "To automate it, add the database's ADO.NET connection string as the"
+              echo "repository secret \`AZURE_SQL_CONNECTION_STRING\`. The Azure SQL"
+              echo "firewall must also permit the runner — the simplest setting is"
+              echo "*Allow Azure services and resources to access this server*."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

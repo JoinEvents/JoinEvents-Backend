@@ -164,8 +164,31 @@ Keep `JWT_KEY` somewhere safe — rotating it signs every existing user out.
 ### Step 4 — Apply the database schema
 
 Migrations do **not** run at startup (`Database:MigrateOnStartup` defaults to false),
-because EF Core's `Migrate()` is not safe to run from several instances at once. Apply
-them from your machine, pointed at the Azure database:
+because EF Core's `Migrate()` is not safe to run from several instances at once. They are
+a release step instead, run by the **Database migration** workflow — which the deploy
+workflow calls before it deploys, so the schema is never behind the code.
+
+Relying on someone to remember this from their own machine is what left the Azure database
+unmigrated while `/health` still answered 200: the readiness probe only opened a
+connection, which succeeds against a database that has no tables at all. It now reports
+`Degraded` and names the number of outstanding migrations.
+
+Set the repository secret `AZURE_SQL_CONNECTION_STRING` to the database's ADO.NET
+connection string and the workflow applies migrations itself. The Azure SQL firewall has
+to let the runner through; *Allow Azure services and resources to access this server* is
+the simplest setting.
+
+Every run also attaches `migration.sql` — an idempotent script, safe to run against a
+database in any state and safe to re-run. Without the secret that artifact is the whole
+output: download it from the run and execute it in the Azure Portal query editor.
+
+If the deployed database is already behind and you want it caught up now, without
+waiting on a secret or a firewall rule, set `Database__MigrateOnStartup` to `true` in the
+App Service's environment variables and restart it. Startup then logs the pending count
+and applies them. Turn it back off afterwards: `Migrate()` is not safe to run from several
+instances at once, so leaving it on makes scaling out a race.
+
+To apply them from your own machine instead:
 
 ```bash
 export ConnectionStrings__DefaultConnection='<the string from step 2>'
