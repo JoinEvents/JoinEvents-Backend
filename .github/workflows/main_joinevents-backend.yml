@@ -41,9 +41,19 @@ jobs:
           name: .net-app
           path: ${{env.DOTNET_ROOT}}/myapp
 
+  # The schema goes first, so newly deployed code never starts against a database
+  # that is missing what it expects. Additive migrations leave the running
+  # instance working throughout. Without AZURE_SQL_CONNECTION_STRING set this
+  # only produces migration.sql as an artifact and the deploy carries on — see
+  # .github/workflows/migrate-database.yml.
+  migrate:
+    needs: build
+    uses: ./.github/workflows/migrate-database.yml
+    secrets: inherit
+
   deploy:
     runs-on: windows-latest
-    needs: build
+    needs: [build, migrate]
     permissions:
       id-token: write #This is required for requesting the JWT
       contents: read #This is required for actions/checkout
