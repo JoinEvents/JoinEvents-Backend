@@ -35,9 +35,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Guards against the class of problem this repository already had: credentials and
-      # signing keys committed to source control.
+      # Guards against the class of problem this repository already had: credentials
+      # and signing keys committed to source control.
+      #
+      # The gitleaks GitHub Action requires a paid licence for organization repos, so
+      # this runs the MIT-licensed CLI directly instead. The version is resolved at run
+      # time so this does not rot.
       - name: Scan for committed secrets
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION=$(curl -sSf https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
+            | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
+          echo "Using gitleaks v$VERSION"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          ./gitleaks detect --source . --no-banner --redact --exit-code 1

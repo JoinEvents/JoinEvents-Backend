@@ -21,13 +21,19 @@ jobs:
       - name: Set up .NET Core
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 'dotnet8.x'
+          dotnet-version: '8.0.x'
 
       - name: Build with dotnet
-        run: dotnet build --configuration Release
+        run: dotnet build EventEase.sln --configuration Release
 
+      # Deploying an untested build costs far more time than the tests take.
+      - name: Test
+        run: dotnet test EventEase.sln --configuration Release --no-build
+
+      # Publish the API project specifically. Publishing the solution would also
+      # emit the test project into the same folder and ship it to App Service.
       - name: dotnet publish
-        run: dotnet publish -c Release -o "${{env.DOTNET_ROOT}}/myapp"
+        run: dotnet publish EventEase/EventEase.Api.csproj -c Release -o "${{env.DOTNET_ROOT}}/myapp"
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4

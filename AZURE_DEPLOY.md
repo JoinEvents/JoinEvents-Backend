@@ -1,9 +1,12 @@
 # Deploying the JoinEvents API to Azure (free tier)
 
-> **Two paths are documented here.** The **App Service** path below is the one currently
-> wired up in `.github/workflows/deploy-azure.yml`. The **Container Apps** path further
-> down (`azure/provision.sh`) is an alternative that scales to zero; ignore it unless you
-> decide to switch.
+> **Deployment runs from `.github/workflows/main_joinevents-backend.yml`**, which Azure's
+> Deployment Center generated and wired to federated (OIDC) credentials — no publish
+> profile needed. It deploys to the App Service named in its `app-name:` field on every
+> push to `main`.
+>
+> The **Container Apps** path further down (`azure/provision.sh`) is an untaken
+> alternative that scales to zero; ignore it unless you decide to switch.
 
 ---
 
@@ -63,11 +66,14 @@ migration was committed for it.
 
 ### Deploy
 
-1. App Service **Overview → Get publish profile**, save the file's contents as the repo
-   secret `AZURE_WEBAPP_PUBLISH_PROFILE`.
-2. Check `AZURE_WEBAPP_NAME` at the top of `.github/workflows/deploy-azure.yml` matches
-   your App Service resource name (the hostname's first segment, not the whole hostname).
-3. Push, or run the workflow manually.
+Azure's Deployment Center already created the workflow and its credentials, so a push to
+`main` deploys. No publish profile is needed — it authenticates with OIDC using the
+`AZUREAPPSERVICE_*` secrets Azure added for you.
+
+Check that `app-name:` in `.github/workflows/main_joinevents-backend.yml` matches the App
+Service you actually want to deploy to. It is the resource name, not the hostname: for
+`joinevents-api-chiru-xxxx.centralindia-01.azurewebsites.net` the name is
+`joinevents-api-chiru`.
 
 ### Checking it
 
