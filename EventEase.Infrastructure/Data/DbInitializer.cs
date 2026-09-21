@@ -41,7 +41,11 @@ namespace EventEase.Infrastructure.Data
                 Step("admin", () => EnsureStaffUser(
                     db, options.AdminEmail, options.AdminPassword, AuthRoles.Admin, "Administrator")),
                 Step("support", () => EnsureStaffUser(
-                    db, options.SupportEmail, options.SupportPassword, AuthRoles.Support, "Support"))
+                    db, options.SupportEmail, options.SupportPassword, AuthRoles.Support, "Support")),
+                Step("uat-admin", () => EnsureUatStaffUser(
+                    db, UatAdminEmail, UatStaffPassword, AuthRoles.Admin, "UAT Administrator")),
+                Step("uat-support", () => EnsureUatStaffUser(
+                    db, UatSupportEmail, UatStaffPassword, AuthRoles.Support, "UAT Support"))
             };
 
             if (options.SeedDemoData)
@@ -50,6 +54,79 @@ namespace EventEase.Infrastructure.Data
             }
 
             return notes;
+        }
+
+        // ── UAT staff accounts ─────────────────────────────────────────────────
+        //
+        // Fixed credentials for testing, created on every start. Admin and support cannot be
+        // registered for in the app, and the configuration-driven bootstrap above depends on
+        // four settings being right in the hosting environment, which is a thing to get wrong
+        // before anyone can sign in at all. These two need nothing set up.
+        //
+        // [SECURITY] The credentials are in the source, so they are public. Anyone who can
+        // read this repository can sign in as an administrator on any deployment running this
+        // code. That is a deliberate trade for a UAT environment holding throwaway data, and
+        // it is not safe anywhere else.
+        //
+        // Before this backend holds anything real: delete this block and these two rows, and
+        // use Bootstrap:AdminEmail / Bootstrap:SupportEmail instead — that path takes its
+        // credentials from the environment and never writes them down here.
+        private const string UatAdminEmail = "admin@gmail.com";
+        private const string UatSupportEmail = "support@gmail.com";
+        private const string UatStaffPassword = "Test@123";
+
+        /// <summary>
+        /// Creates a fixed UAT account, and repairs one that has drifted from what this file says.
+        /// </summary>
+        /// <remarks>
+        /// Keyed on the email, not on whether the role is already taken — unlike the
+        /// configured bootstrap, which skips when anybody holds the role. That guard is a
+        /// good one for a real deployment and is very likely why a configured admin never
+        /// appeared here: something already held Admin. An account whose entire purpose is
+        /// that a documented password works must not be defeated the same way, so an
+        /// existing row has its role and password brought back into line.
+        /// </remarks>
+        private static string EnsureUatStaffUser(
+            EventEaseDbContext db, string email, string password, string role, string name)
+        {
+            var existing = db.Users.FirstOrDefault(u => u.Email == email);
+
+            if (existing is null)
+            {
+                db.Users.Add(new User
+                {
+                    Id = Guid.NewGuid(),
+                    Name = name,
+                    Email = email,
+                    Phone = string.Empty,
+                    Role = role,
+                    PasswordHash = Hash(password),
+                    CreatedAt = DateTime.UtcNow
+                });
+                db.SaveChanges();
+                return $"created {email}";
+            }
+
+            var repaired = new List<string>();
+            if (existing.Role != role)
+            {
+                existing.Role = role;
+                repaired.Add("role");
+            }
+            if (string.IsNullOrEmpty(existing.PasswordHash)
+                || !BCrypt.Net.BCrypt.Verify(password, existing.PasswordHash))
+            {
+                existing.PasswordHash = Hash(password);
+                repaired.Add("password");
+            }
+
+            if (repaired.Count == 0)
+            {
+                return $"{email} already correct";
+            }
+
+            db.SaveChanges();
+            return $"{email} reset ({string.Join(" and ", repaired)})";
         }
 
         /// <summary>Runs one step, turning a failure into a reportable line rather than an abort.</summary>

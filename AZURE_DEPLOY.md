@@ -163,6 +163,23 @@ Keep `JWT_KEY` somewhere safe — rotating it signs every existing user out.
 
 ---
 
+### UAT staff accounts
+
+**This deployment is a UAT environment.** `DbInitializer` creates a fixed admin and a fixed
+support account on every start, with credentials written into the source. They need no
+configuration, which is the point: the settings-driven path below depends on four values
+being right in the hosting environment before anyone can sign in at all.
+
+Because the credentials are in the repository, they are public. Anyone who can read the code
+can sign in as an administrator here. That is a deliberate trade for an environment holding
+throwaway data.
+
+**Before this backend holds anything real:** remove the UAT block from
+`EventEase.Infrastructure/Data/DbInitializer.cs`, delete those two rows from the database, and
+use the configured path below instead.
+
+---
+
 ### Staff accounts
 
 The app only registers customers and vendors, so the first admin and the first support agent
