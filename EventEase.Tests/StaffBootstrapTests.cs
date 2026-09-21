@@ -59,13 +59,17 @@ namespace EventEase.Tests
         }
 
         [Fact]
-        public void Creates_nothing_when_no_credentials_are_configured()
+        public void Creates_only_the_fixed_UAT_pair_when_nothing_is_configured()
         {
             using var db = NewDb();
 
             DbInitializer.Seed(db, new SeedOptions { SeedDemoData = false });
 
-            Assert.Empty(db.Users);
+            // The configured bootstrap adds nothing without configuration; the fixed UAT
+            // accounts are created regardless, which is the point of them.
+            Assert.Equal(2, db.Users.Count());
+            Assert.Contains(db.Users, u => u.Role == AuthRoles.Admin);
+            Assert.Contains(db.Users, u => u.Role == AuthRoles.Support);
         }
 
         [Fact]
@@ -79,7 +83,8 @@ namespace EventEase.Tests
                 SupportPassword = "Test@123"
             });
 
-            Assert.Empty(db.Users.Where(u => u.Role == AuthRoles.Admin));
+            // No admin from configuration; the one present is the fixed UAT account.
+            Assert.Single(db.Users.Where(u => u.Role == AuthRoles.Admin));
             Assert.Single(db.Users.Where(u => u.Role == AuthRoles.Support));
         }
 
@@ -162,8 +167,9 @@ namespace EventEase.Tests
 
             var notes = DbInitializer.Seed(db, Staff());
 
-            // Each step is reported rather than the first failure aborting the rest.
-            Assert.Equal(3, notes.Count);
+            // Each step is reported rather than the first failure aborting the rest:
+            // tiers, the two configured roles, and the two fixed UAT accounts.
+            Assert.Equal(5, notes.Count);
             Assert.All(notes, n => Assert.Contains("FAILED", n));
         }
 
@@ -183,8 +189,63 @@ namespace EventEase.Tests
 
             DbInitializer.Seed(db, Staff());
 
-            Assert.Single(db.Users.Where(u => u.Role == AuthRoles.Admin));
-            Assert.Equal("someone.else@example.test", db.Users.Single(u => u.Role == AuthRoles.Admin).Email);
+            // The configured address is still skipped because the role is taken, and the
+            // hand-made account keeps its password.
+            var byHand = db.Users.Single(u => u.Email == "someone.else@example.test");
+            Assert.Equal(AuthRoles.Admin, byHand.Role);
+            Assert.True(BCrypt.Net.BCrypt.Verify("Whatever!1", byHand.PasswordHash));
+        }
+
+        [Fact]
+        public void Creates_the_fixed_UAT_admin_even_when_the_role_is_already_taken()
+        {
+            using var db = NewDb();
+            db.Users.Add(new User
+            {
+                Id = Guid.NewGuid(),
+                Name = "Existing",
+                Email = "someone.else@example.test",
+                Role = AuthRoles.Admin,
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword("Whatever!1", workFactor: 4)
+            });
+            db.SaveChanges();
+
+            DbInitializer.Seed(db, new SeedOptions());
+
+            // This is exactly the case that makes the configured bootstrap do nothing
+            // silently, and the reason the UAT pair is keyed on email instead.
+            Assert.Contains(db.Users, u => u.Email == "admin@gmail.com" && u.Role == AuthRoles.Admin);
+        }
+
+        [Fact]
+        public void Puts_a_changed_UAT_password_back_and_says_so()
+        {
+            using var db = NewDb();
+            DbInitializer.Seed(db, new SeedOptions());
+
+            var admin = db.Users.Single(u => u.Email == "admin@gmail.com");
+            var seededHash = admin.PasswordHash;
+            admin.PasswordHash = BCrypt.Net.BCrypt.HashPassword("SomethingElse!1", workFactor: 4);
+            db.SaveChanges();
+
+            var notes = DbInitializer.Seed(db, new SeedOptions());
+
+            var restored = db.Users.Single(u => u.Email == "admin@gmail.com").PasswordHash;
+            Assert.False(BCrypt.Net.BCrypt.Verify("SomethingElse!1", restored));
+            Assert.NotEqual(seededHash, restored); // rehashed, not merely left alone
+            Assert.Contains(notes, n => n.StartsWith("uat-admin:") && n.Contains("reset"));
+        }
+
+        [Fact]
+        public void Reports_the_UAT_pair_as_already_correct_on_a_later_start()
+        {
+            using var db = NewDb();
+            DbInitializer.Seed(db, new SeedOptions());
+
+            var notes = DbInitializer.Seed(db, new SeedOptions());
+
+            Assert.Contains(notes, n => n == "uat-admin: admin@gmail.com already correct");
+            Assert.Contains(notes, n => n == "uat-support: support@gmail.com already correct");
         }
     }
 }
