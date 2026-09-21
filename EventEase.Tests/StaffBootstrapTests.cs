@@ -111,6 +111,63 @@ namespace EventEase.Tests
         }
 
         [Fact]
+        public void Reports_what_it_did_for_each_role()
+        {
+            using var db = NewDb();
+
+            var notes = DbInitializer.Seed(db, Staff());
+
+            Assert.Contains(notes, n => n.StartsWith("admin:") && n.Contains("created admin@gmail.com"));
+            Assert.Contains(notes, n => n.StartsWith("support:") && n.Contains("created support@gmail.com"));
+        }
+
+        [Fact]
+        public void Reports_that_a_role_is_already_held_and_names_the_holder()
+        {
+            using var db = NewDb();
+            db.Users.Add(new User
+            {
+                Id = Guid.NewGuid(),
+                Name = "Existing",
+                Email = "someone.else@example.test",
+                Role = AuthRoles.Admin,
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword("Whatever!1", workFactor: 4)
+            });
+            db.SaveChanges();
+
+            var notes = DbInitializer.Seed(db, Staff());
+
+            // The usual surprise: the configured address was never created because the role
+            // was already taken, and nothing previously said so.
+            Assert.Contains(notes, n => n.StartsWith("admin:")
+                                        && n.Contains("already held by someone.else@example.test"));
+        }
+
+        [Fact]
+        public void Reports_when_a_role_is_not_configured()
+        {
+            using var db = NewDb();
+
+            var notes = DbInitializer.Seed(db, new SeedOptions { SeedDemoData = false });
+
+            Assert.Contains(notes, n => n == "admin: not configured");
+            Assert.Contains(notes, n => n == "support: not configured");
+        }
+
+        [Fact]
+        public void A_failing_step_does_not_stop_the_ones_after_it()
+        {
+            using var db = NewDb();
+            db.Dispose(); // Forces every step to throw, standing in for a database problem.
+
+            var notes = DbInitializer.Seed(db, Staff());
+
+            // Each step is reported rather than the first failure aborting the rest.
+            Assert.Equal(3, notes.Count);
+            Assert.All(notes, n => Assert.Contains("FAILED", n));
+        }
+
+        [Fact]
         public void Leaves_an_admin_created_by_hand_alone()
         {
             using var db = NewDb();

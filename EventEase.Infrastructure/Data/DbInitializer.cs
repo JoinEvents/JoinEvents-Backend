@@ -21,17 +21,47 @@ namespace EventEase.Infrastructure.Data
         /// Controls admin bootstrap and demo seeding. Demo seeding must never be enabled in
         /// production: it creates well-known accounts.
         /// </param>
-        public static void Seed(EventEaseDbContext db, SeedOptions options)
+        /// <returns>
+        /// One line per step, for the caller to log. Seeding is otherwise entirely silent:
+        /// when a staff account does not appear, there is nothing to distinguish "not
+        /// configured" from "someone already holds the role" from "the step threw", and the
+        /// only symptom is a login that says invalid credentials.
+        /// </returns>
+        public static IReadOnlyList<string> Seed(EventEaseDbContext db, SeedOptions options)
         {
             ArgumentNullException.ThrowIfNull(options);
 
-            EnsureTiers(db);
-            EnsureStaffUser(db, options.AdminEmail, options.AdminPassword, AuthRoles.Admin, "Administrator");
-            EnsureStaffUser(db, options.SupportEmail, options.SupportPassword, AuthRoles.Support, "Support");
+            // Each step stands on its own. They used to run in sequence under the caller's
+            // single try/catch, so a failure in the first cost every step after it — the
+            // staff bootstrap would never run, and the log would show one line about
+            // seeding failing without saying what had not happened.
+            var notes = new List<string>
+            {
+                Step("tiers", () => { EnsureTiers(db); return "verified"; }),
+                Step("admin", () => EnsureStaffUser(
+                    db, options.AdminEmail, options.AdminPassword, AuthRoles.Admin, "Administrator")),
+                Step("support", () => EnsureStaffUser(
+                    db, options.SupportEmail, options.SupportPassword, AuthRoles.Support, "Support"))
+            };
 
             if (options.SeedDemoData)
             {
-                SeedDemoData(db);
+                notes.Add(Step("demo", () => { SeedDemoData(db); return "fixtures seeded"; }));
+            }
+
+            return notes;
+        }
+
+        /// <summary>Runs one step, turning a failure into a reportable line rather than an abort.</summary>
+        private static string Step(string name, Func<string> action)
+        {
+            try
+            {
+                return $"{name}: {action()}";
+            }
+            catch (Exception ex)
+            {
+                return $"{name}: FAILED — {ex.GetType().Name}: {ex.Message}";
             }
         }
 
@@ -50,24 +80,27 @@ namespace EventEase.Infrastructure.Data
         /// silently revert whatever the operator has since chosen, and would turn a
         /// configuration value left lying around into a standing way back in.
         /// </remarks>
-        private static void EnsureStaffUser(
+        private static string EnsureStaffUser(
             EventEaseDbContext db, string? email, string? password, string role, string name)
         {
             if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
             {
                 // Nothing configured — leave the database alone rather than inventing credentials.
-                return;
+                return "not configured";
             }
 
-            if (db.Users.Any(u => u.Role == role))
+            var existing = db.Users.FirstOrDefault(u => u.Role == role);
+            if (existing is not null)
             {
-                return;
+                // Names the holder, because the usual surprise is that someone else already
+                // has the role and the configured address was therefore never created.
+                return $"already held by {existing.Email}; configured address not created";
             }
 
             var normalised = email.Trim().ToLowerInvariant();
             if (db.Users.Any(u => u.Email == normalised))
             {
-                return;
+                return $"{normalised} already exists under a different role";
             }
 
             db.Users.Add(new User
@@ -82,6 +115,7 @@ namespace EventEase.Infrastructure.Data
             });
 
             db.SaveChanges();
+            return $"created {normalised}";
         }
 
         /// <summary>
