@@ -420,7 +420,7 @@ try
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<EventEaseDbContext>();
-    DbInitializer.Seed(db, new SeedOptions
+    var seedNotes = DbInitializer.Seed(db, new SeedOptions
     {
         AdminEmail = builder.Configuration["Bootstrap:AdminEmail"],
         AdminPassword = builder.Configuration["Bootstrap:AdminPassword"],
@@ -430,7 +430,14 @@ try
         SeedDemoData = !app.Environment.IsProduction()
                        && builder.Configuration.GetValue("Database:SeedDemoData", false)
     });
-    Log.Information("[Seed] Reference data verified.");
+
+    // One line per step. "Reference data verified" said nothing about whether a staff
+    // account had been created, skipped or had failed to be created, which left a login
+    // that says invalid credentials with nowhere to look.
+    foreach (var note in seedNotes)
+    {
+        Log.Information("[Seed] {Outcome}", note);
+    }
 }
 catch (Exception ex)
 {
