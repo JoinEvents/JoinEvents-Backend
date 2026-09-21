@@ -26,6 +26,8 @@ back to an insecure default, and a missing one shows up as a container that will
 | `Payments__AllowSimulator` | `true` | **Startup throws** |
 | `Bootstrap__AdminEmail` | Your email | Admin is not created |
 | `Bootstrap__AdminPassword` | A strong password | Admin is not created |
+| `Bootstrap__SupportEmail` | Support team email | Support agent is not created |
+| `Bootstrap__SupportPassword` | A strong password | Support agent is not created |
 
 `AllowedOrigins__0` and `Payments__AllowSimulator` are the two that are easy to miss.
 The CORS guard refuses to fall back to a default origin list in Production, and the
@@ -158,6 +160,22 @@ export IMAGE='mcr.microsoft.com/k8se/quickstart:latest'   # placeholder for the 
 The placeholder image just gets the app created; step 5 replaces it with your build.
 
 Keep `JWT_KEY` somewhere safe — rotating it signs every existing user out.
+
+---
+
+### Staff accounts
+
+The app only registers customers and vendors, so the first admin and the first support agent
+have to come from somewhere else. Set the four `Bootstrap__*` settings above and they are
+created on the next start.
+
+Each is created only when nobody holds that role yet, and an existing account's password is
+never reset — so leaving the settings in place does not turn them into a standing way back
+in, and changing one later does not take effect. To rotate a password, change it in the app
+rather than here.
+
+Keep the passwords in the App Service configuration, never in the repository: a password
+committed here would be a working administrator login for every copy of this codebase.
 
 ---
 

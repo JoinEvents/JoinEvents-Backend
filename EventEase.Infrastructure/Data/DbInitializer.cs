@@ -26,7 +26,8 @@ namespace EventEase.Infrastructure.Data
             ArgumentNullException.ThrowIfNull(options);
 
             EnsureTiers(db);
-            EnsureAdminUser(db, options);
+            EnsureStaffUser(db, options.AdminEmail, options.AdminPassword, AuthRoles.Admin, "Administrator");
+            EnsureStaffUser(db, options.SupportEmail, options.SupportPassword, AuthRoles.Support, "Support");
 
             if (options.SeedDemoData)
             {
@@ -35,25 +36,36 @@ namespace EventEase.Infrastructure.Data
         }
 
         /// <summary>
-        /// Creates the initial administrator if — and only if — no administrator exists yet.
-        /// An existing admin's password is never reset here: doing so on every start would
-        /// silently revert any password the operator has since chosen.
+        /// Creates a staff account for a role if — and only if — nobody holds that role yet.
         /// </summary>
-        private static void EnsureAdminUser(EventEaseDbContext db, SeedOptions options)
+        /// <remarks>
+        /// Admin and support cannot be signed up for: registration only offers customer and
+        /// vendor, and nothing else creates them, so without this there is no way to get a
+        /// first one. That is deliberate, and so is taking the credentials from configuration
+        /// rather than from the source: an email and password written here would be an
+        /// administrator login for every deployment of this repository, readable by anyone who
+        /// can read the code.
+        ///
+        /// An existing holder's password is never reset. Doing that on every start would
+        /// silently revert whatever the operator has since chosen, and would turn a
+        /// configuration value left lying around into a standing way back in.
+        /// </remarks>
+        private static void EnsureStaffUser(
+            EventEaseDbContext db, string? email, string? password, string role, string name)
         {
-            if (string.IsNullOrWhiteSpace(options.AdminEmail) || string.IsNullOrWhiteSpace(options.AdminPassword))
+            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
             {
                 // Nothing configured — leave the database alone rather than inventing credentials.
                 return;
             }
 
-            if (db.Users.Any(u => u.Role == AuthRoles.Admin))
+            if (db.Users.Any(u => u.Role == role))
             {
                 return;
             }
 
-            var email = options.AdminEmail.Trim().ToLowerInvariant();
-            if (db.Users.Any(u => u.Email == email))
+            var normalised = email.Trim().ToLowerInvariant();
+            if (db.Users.Any(u => u.Email == normalised))
             {
                 return;
             }
@@ -61,11 +73,11 @@ namespace EventEase.Infrastructure.Data
             db.Users.Add(new User
             {
                 Id = Guid.NewGuid(),
-                Name = "Administrator",
-                Email = email,
+                Name = name,
+                Email = normalised,
                 Phone = string.Empty,
-                Role = AuthRoles.Admin,
-                PasswordHash = Hash(options.AdminPassword),
+                Role = role,
+                PasswordHash = Hash(password),
                 CreatedAt = DateTime.UtcNow
             });
 
@@ -242,6 +254,12 @@ namespace EventEase.Infrastructure.Data
 
         /// <summary>Password for the bootstrap administrator. Null disables admin bootstrap.</summary>
         public string? AdminPassword { get; init; }
+
+        /// <summary>Email for the bootstrap support agent. Null disables support bootstrap.</summary>
+        public string? SupportEmail { get; init; }
+
+        /// <summary>Password for the bootstrap support agent. Null disables support bootstrap.</summary>
+        public string? SupportPassword { get; init; }
 
         /// <summary>When true, seeds demo accounts and catalogue fixtures. Never enable in production.</summary>
         public bool SeedDemoData { get; init; }

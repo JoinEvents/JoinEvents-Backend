@@ -21,6 +21,8 @@ this repository. Startup now fails fast instead.
 | `AllowedOrigins` | `AllowedOrigins__0`, `AllowedOrigins__1`, … | Required in Production. |
 | `Bootstrap:AdminEmail` | `Bootstrap__AdminEmail` | Used once, only if no admin exists. |
 | `Bootstrap:AdminPassword` | `Bootstrap__AdminPassword` | Used once, only if no admin exists. |
+| `Bootstrap:SupportEmail` | `Bootstrap__SupportEmail` | Used once, only if no support agent exists. |
+| `Bootstrap:SupportPassword` | `Bootstrap__SupportPassword` | Used once, only if no support agent exists. |
 | `Authentication:Google:ClientId` | `Authentication__Google__ClientId` | Required for Google sign-in. |
 | `Authentication:Facebook:AppId` / `AppSecret` | `Authentication__Facebook__*` | Required for Facebook sign-in. |
 | `Database:MigrateOnStartup` | `Database__MigrateOnStartup` | Default `false`; see below. |

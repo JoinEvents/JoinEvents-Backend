@@ -424,6 +424,8 @@ try
     {
         AdminEmail = builder.Configuration["Bootstrap:AdminEmail"],
         AdminPassword = builder.Configuration["Bootstrap:AdminPassword"],
+        SupportEmail = builder.Configuration["Bootstrap:SupportEmail"],
+        SupportPassword = builder.Configuration["Bootstrap:SupportPassword"],
         // [SECURITY] Demo fixtures use well-known credentials and are never seeded in production.
         SeedDemoData = !app.Environment.IsProduction()
                        && builder.Configuration.GetValue("Database:SeedDemoData", false)
