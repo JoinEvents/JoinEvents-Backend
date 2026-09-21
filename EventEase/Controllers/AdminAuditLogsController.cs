@@ -23,11 +23,20 @@ namespace EventEase.Api.Controllers
             _db = db;
         }
 
+        /// <summary>The audit trail, newest first.</summary>
+        /// <remarks>
+        /// Bounded. AuditMiddleware writes a row for every admin write, so this table only
+        /// grows, and reading all of it to render a screen that shows the recent entries gets
+        /// slower for as long as the system is used.
+        /// </remarks>
         [HttpGet]
-        public async Task<IActionResult> GetAuditLogs()
+        public async Task<IActionResult> GetAuditLogs([FromQuery] int take = 200)
         {
+            take = Math.Clamp(take, 1, 1000);
+
             var logs = await _db.AuditLogs
                 .OrderByDescending(l => l.Timestamp)
+                .Take(take)
                 .ToListAsync();
 
             var response = logs.Select(l => new
@@ -43,12 +52,32 @@ namespace EventEase.Api.Controllers
                 entityId = l.EntityId,
                 entityName = l.EntityName,
                 severity = l.Severity.ToLower(),
-                metadata = string.IsNullOrEmpty(l.MetadataJson) 
-                    ? null 
-                    : System.Text.Json.JsonSerializer.Deserialize<object>(l.MetadataJson)
+                metadata = ParseMetadata(l.MetadataJson)
             }).ToList();
 
             return Ok(response);
+        }
+
+        /// <summary>
+        /// Reads a row's metadata, or nothing at all if it will not parse.
+        /// </summary>
+        /// <remarks>
+        /// Deserialising inside the projection meant one row holding something that is not
+        /// JSON threw while the response was being built, and the whole audit trail answered
+        /// 500 — the entries either side of it are perfectly readable and were lost with it.
+        /// </remarks>
+        private static object? ParseMetadata(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return null;
+
+            try
+            {
+                return System.Text.Json.JsonSerializer.Deserialize<object>(json);
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return null;
+            }
         }
 
         public class CreateAuditLogDto
