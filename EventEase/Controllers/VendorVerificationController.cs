@@ -110,15 +110,23 @@ namespace EventEase.Api.Controllers
                 }
             };
 
-            var docResponses = docs.Select(d => new
+            // FileUrl holds the storage path, not a link. Verification documents live in a
+            // private container, so each one is turned into a short-lived read URL here rather
+            // than being handed out as a permanent address.
+            var docResponses = new List<object>();
+            foreach (var d in docs)
             {
-                type = d.DocumentType,
-                name = d.FileName,
-                status = d.Status,
-                date = d.UploadedAt.ToString("yyyy-MM-dd"),
-                fileUrl = d.FileUrl,
-                url = d.FileUrl
-            }).ToList();
+                var link = await _fileStorage.GetUrlAsync(d.FileUrl);
+                docResponses.Add(new
+                {
+                    type = d.DocumentType,
+                    name = d.FileName,
+                    status = d.Status,
+                    date = d.UploadedAt.ToString("yyyy-MM-dd"),
+                    fileUrl = link,
+                    url = link
+                });
+            }
 
             return Ok(new { steps, docs = docResponses, isVerified, status, remarks });
         }
@@ -161,14 +169,16 @@ namespace EventEase.Api.Controllers
             _db.VendorDocuments.Add(doc);
             await _db.SaveChangesAsync();
 
+            var link = await _fileStorage.GetUrlAsync(doc.FileUrl);
+
             return Ok(new
             {
                 type = doc.DocumentType,
                 name = doc.FileName,
                 status = doc.Status,
                 date = doc.UploadedAt.ToString("yyyy-MM-dd"),
-                fileUrl = doc.FileUrl,
-                url = doc.FileUrl
+                fileUrl = link,
+                url = link
             });
         }
     }

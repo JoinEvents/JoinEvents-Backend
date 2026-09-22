@@ -600,17 +600,23 @@ namespace EventEase.Api.Controllers
 
             foreach (var file in files)
             {
-                // In reality, upload to BlobStorage
+                // A failure here used to be swallowed and replaced with a made-up
+                // storage.joinevents.com URL, which wrote a permanently broken image onto the
+                // package. An upload that did not happen is reported as one.
                 string url;
                 try
                 {
                     var blobName = await _blobService.UploadAsync(file, package.VendorId.ToString());
-                    url = $"https://storage.joinevents.com/uploads/{blobName}";
+                    url = await _blobService.GetUrlAsync(blobName);
                 }
-                catch (Exception)
+                catch (ArgumentException ex)
                 {
-                    // Fallback local or mock URL for test
-                    url = $"https://storage.joinevents.com/uploads/pkg_{package.Id:N}/{file.FileName}";
+                    return BadRequest(new { error = ex.Message });
+                }
+                catch (Exception ex)
+                {
+                    Serilog.Log.Error(ex, "Failed to upload package image for package {PackageId}", package.Id);
+                    return StatusCode(502, new { error = "Image storage is unavailable. Please try again." });
                 }
 
                 var img = new PackageImage
@@ -648,6 +654,21 @@ namespace EventEase.Api.Controllers
 
             _db.PackageImages.Remove(img);
             await _db.SaveChangesAsync();
+
+            // Drop the underlying object too, or the account accumulates images no row refers to.
+            // Best effort: the row is already gone and a storage hiccup should not fail the call.
+            var blobName = _blobService.TryResolveBlobName(img.Url);
+            if (blobName is not null)
+            {
+                try
+                {
+                    await _blobService.DeleteAsync(blobName);
+                }
+                catch (Exception ex)
+                {
+                    Serilog.Log.Warning(ex, "Removed package image {ImageId} but could not delete blob {Blob}", img.Id, blobName);
+                }
+            }
 
             return Ok(new { success = true, remainingImages = package.Images.Count });
         }

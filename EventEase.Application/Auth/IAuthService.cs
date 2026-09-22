@@ -19,6 +19,9 @@ namespace EventEase.Application.Auth
         Task<UserProfileDto?> UpdateProfileAsync(Guid userId, UpdateProfileDto dto);
         Task<bool> DeleteAccountAsync(Guid userId);
         Task<bool> UpdateAvatarAsync(Guid userId, string avatarUrl);
+
+        /// <summary>The user's current avatar URL, so a replaced picture can be cleaned up.</summary>
+        Task<string?> GetAvatarAsync(Guid userId);
         Task<AuthTokens> SocialLoginAsync(SocialLoginDto dto);
 
         /// <summary>

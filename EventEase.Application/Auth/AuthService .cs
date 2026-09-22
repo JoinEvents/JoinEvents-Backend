@@ -391,6 +391,9 @@ namespace EventEase.Application.Auth
             );
         }
 
+        public async Task<string?> GetAvatarAsync(Guid userId) =>
+            await _db.Users.Where(u => u.Id == userId).Select(u => u.Avatar).FirstOrDefaultAsync();
+
         public async Task<bool> UpdateAvatarAsync(Guid userId, string avatarUrl)
         {
             var user = await _db.Users.FindAsync(userId);

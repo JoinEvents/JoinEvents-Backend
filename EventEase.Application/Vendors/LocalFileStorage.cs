@@ -17,5 +17,8 @@ namespace EventEase.Application.Vendors
             content.CopyTo(fs);
             return Task.FromResult($"/files/{container}/{fileName}");
         }
+
+        /// <summary>Local files are already served from /files, so the stored path is the URL.</summary>
+        public Task<string> GetUrlAsync(string? storedPath) => Task.FromResult(storedPath ?? string.Empty);
     }
 }

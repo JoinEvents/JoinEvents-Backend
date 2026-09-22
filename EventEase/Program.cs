@@ -244,7 +244,6 @@ builder.Services.AddHttpClient();
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<IVendorService, VendorService>();
 builder.Services.AddScoped<IVendorCalendarService, VendorCalendarService>();
-builder.Services.AddScoped<IFileStorage, LocalFileStorage>();
 builder.Services.AddScoped<IPricingEngine, SimplePricingEngine>();
 builder.Services.AddScoped<IBookingPricingService, BookingPricingService>();
 builder.Services.AddScoped<ICartService, CartService>();
@@ -265,7 +264,45 @@ builder.Services.AddScoped<EventEase.Application.Categories.IEventCategoryServic
 builder.Services.AddScoped<EventEase.Application.SupportTicket.ISupportService, EventEase.Application.SupportTicket.SupportService>();
 builder.Services.AddScoped<ILoyaltyService, LoyaltyService>();
 builder.Services.AddScoped<ITierService, TierService>();
-builder.Services.AddSingleton<IBlobService, GcpBucketService>();
+// --- Object storage -------------------------------------------------------------------
+// Uploads (avatars, package galleries, verification documents, support attachments) go to
+// Azure Storage. Container filesystems here are ephemeral and not shared between replicas,
+// so anything written to local disk is lost on restart and invisible to the other instances.
+//
+// "Gcp" keeps the previous Google Cloud Storage path working for deployments that have not
+// moved yet. Set Storage:Provider to pick.
+builder.Services.Configure<AzureStorageOptions>(
+    builder.Configuration.GetSection(AzureStorageOptions.SectionName));
+
+var storageProvider = builder.Configuration["Storage:Provider"] ?? "Azure";
+
+if (storageProvider.Equals("Gcp", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddSingleton<IBlobService, GcpBucketService>();
+    builder.Services.AddScoped<IFileStorage, LocalFileStorage>();
+}
+else
+{
+    // Fail at startup rather than on the first upload: an API that accepts pictures and
+    // silently has nowhere to put them is worse than one that refuses to boot.
+    var azureConfigured =
+        !string.IsNullOrWhiteSpace(builder.Configuration["AzureStorage:ConnectionString"]) ||
+        !string.IsNullOrWhiteSpace(builder.Configuration["AzureStorage:AccountName"]);
+
+    if (!azureConfigured && builder.Environment.IsProduction())
+    {
+        throw new InvalidOperationException(
+            "Storage:Provider is Azure but no account is configured. Set AzureStorage__ConnectionString, " +
+            "or AzureStorage__AccountName to authenticate with the app's managed identity.");
+    }
+
+    // Outside Production the app still starts, and only the upload endpoints fail. For local
+    // work, point AzureStorage__ConnectionString at Azurite with "UseDevelopmentStorage=true".
+
+    builder.Services.AddSingleton<AzureBlobClientProvider>();
+    builder.Services.AddSingleton<IBlobService, AzureBlobService>();
+    builder.Services.AddSingleton<IFileStorage, AzureBlobFileStorage>();
+}
 builder.Services.AddSignalR();
 
 builder.Services.AddHealthChecks()

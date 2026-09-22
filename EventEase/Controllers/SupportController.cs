@@ -265,7 +265,7 @@ namespace EventEase.Api.Controllers
                 UpdatedAt = ticket.UpdatedAt,
                 Messages = messageResponses,
                 VendorContact = vendorContact,
-                AttachmentUrl = ticket.AttachmentUrl,
+                AttachmentUrl = await _fileStorage.GetUrlAsync(ticket.AttachmentUrl),
                 BookingId = ticket.BookingId,
                 BookingDetails = bookingDetails
             };
@@ -383,7 +383,7 @@ namespace EventEase.Api.Controllers
                     UpdatedAt = ticket.UpdatedAt,
                     Messages = ticketMessages,
                     VendorContact = vendorContact,
-                    AttachmentUrl = ticket.AttachmentUrl,
+                    AttachmentUrl = await _fileStorage.GetUrlAsync(ticket.AttachmentUrl),
                     BookingId = ticket.BookingId,
                     BookingDetails = bookingDetails
                 });
@@ -400,8 +400,13 @@ namespace EventEase.Api.Controllers
             {
                 return BadRequest(new { error = "No file uploaded." });
             }
-            var urlPath = await _fileStorage.SaveAsync("support", file.FileName, file.OpenReadStream(), file.ContentType);
-            return Ok(new { url = urlPath });
+            var storedPath = await _fileStorage.SaveAsync("support", file.FileName, file.OpenReadStream(), file.ContentType);
+
+            // `url` is deliberately the storage path, not a link: the client posts this value
+            // straight back as CreateTicketDto.AttachmentUrl, and a link to a private container
+            // expires. `previewUrl` is the short-lived link to show the file right now.
+            var previewUrl = await _fileStorage.GetUrlAsync(storedPath);
+            return Ok(new { url = storedPath, path = storedPath, previewUrl });
         }
 
         // --- Vendors ---
@@ -429,6 +434,19 @@ namespace EventEase.Api.Controllers
                 .Select(g => new { VendorId = g.Key, Total = g.Sum(b => b.TotalAmount) })
                 .ToDictionaryAsync(x => x.VendorId, x => x.Total);
 
+            // Documents sit in a private container, so each stored path has to be signed before it
+            // can be handed to the reviewer. Resolved up front because the projection below is
+            // synchronous, and keyed by path so duplicates are signed once.
+            var docLinks = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var path in docs.Select(d => d.FileUrl).Where(p => !string.IsNullOrWhiteSpace(p)).Distinct())
+            {
+                docLinks[path!] = await _fileStorage.GetUrlAsync(path);
+            }
+
+            string? ResolveDocLink(string? path)
+                => string.IsNullOrWhiteSpace(path) ? path
+                   : docLinks.TryGetValue(path, out var link) ? link : path;
+
             var response = vendors.Select(v => {
                 users.TryGetValue(v.UserId, out var u);
                 var vDocs = docs.Where(d => d.VendorId == v.Id).ToList();
@@ -452,8 +470,8 @@ namespace EventEase.Api.Controllers
                         name = d.FileName,
                         uploadedAt = d.UploadedAt.ToString("yyyy-MM-dd"),
                         status = d.Status,
-                        fileUrl = d.FileUrl,
-                        url = d.FileUrl
+                        fileUrl = ResolveDocLink(d.FileUrl),
+                        url = ResolveDocLink(d.FileUrl)
                     }).ToList(),
                     rating = avgRating,
                     totalReviews = vReviews.Count,
