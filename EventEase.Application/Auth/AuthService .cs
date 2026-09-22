@@ -165,6 +165,38 @@ namespace EventEase.Application.Auth
                 throw new ArgumentException("Password must contain at least one special character.");
         }
 
+        /// <summary>
+        /// The roles anyone may sign themselves up for.
+        /// </summary>
+        /// <remarks>
+        /// Registration wrote dto.role straight onto the new account, so
+        /// posting role "Admin" to the open, unauthenticated sign-up endpoint
+        /// created a full administrator — the whole admin surface, every
+        /// customer record, every payout. Staff accounts come from the seeder
+        /// or from an existing admin, never from this endpoint.
+        /// </remarks>
+        private static readonly string[] SelfServiceRoles =
+        {
+            AuthRoles.Customer, AuthRoles.User, AuthRoles.Vendor
+        };
+
+        /// <summary>Canonical casing for a requested role, or a refusal.</summary>
+        private static string ResolveSelfServiceRole(string? requested)
+        {
+            if (string.IsNullOrWhiteSpace(requested)) return AuthRoles.Customer;
+
+            var match = SelfServiceRoles.FirstOrDefault(
+                r => r.Equals(requested.Trim(), StringComparison.OrdinalIgnoreCase));
+
+            if (match is null)
+            {
+                // Deliberately does not name the roles that do exist.
+                throw new ArgumentException("Accounts with this role cannot be created through sign-up.");
+            }
+
+            return match;
+        }
+
         public async Task<AuthTokens> RegisterWithPasswordAsync(RegisterWithPasswordDto dto)
         {
             if (string.IsNullOrEmpty(dto.email)) throw new ArgumentException("Email is required");
@@ -172,6 +204,9 @@ namespace EventEase.Application.Auth
 
             // [SECURITY] Validate password strength
             ValidatePasswordStrength(dto.password);
+
+            // [SECURITY] And the role, before an account exists to carry it.
+            var role = ResolveSelfServiceRole(dto.role);
 
             var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == dto.email);
             if (user != null)
@@ -208,7 +243,7 @@ namespace EventEase.Application.Auth
                 Name = dto.name,
                 Email = dto.email,
                 Phone = dto.phone,
-                Role = dto.role ?? "Customer",
+                Role = role,
                 PasswordHash = HashPassword(dto.password),
                 CreatedAt = DateTime.UtcNow,
                 ReferralCode = generatedCode,

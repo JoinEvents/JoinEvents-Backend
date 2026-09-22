@@ -4,6 +4,7 @@ using EventEase.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace EventEase.Infrastructure.Migrations
 {
     [DbContext(typeof(EventEaseDbContext))]
-    partial class EventEaseDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260922071255_AddGuaranteeClaims")]
+    partial class AddGuaranteeClaims
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -207,7 +210,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasColumnType("nvarchar(max)");
+                        .HasColumnType("nvarchar(450)");
 
                     b.Property<decimal>("TdsDeducted")
                         .HasPrecision(18, 2)
@@ -244,6 +247,12 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("Status");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("VendorId", "EventDate");
+
                     b.ToTable("Bookings");
                 });
 
@@ -268,6 +277,8 @@ namespace EventEase.Infrastructure.Migrations
                         .HasColumnType("nvarchar(max)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("BookingId");
 
                     b.ToTable("BookingLogs");
                 });
@@ -351,6 +362,8 @@ namespace EventEase.Infrastructure.Migrations
                         .HasColumnType("datetime2");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ThreadId");
 
                     b.ToTable("ChatMessages");
                 });
@@ -564,6 +577,8 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("UserId", "IsRead");
+
                     b.ToTable("Notifications");
                 });
 
@@ -672,13 +687,19 @@ namespace EventEase.Infrastructure.Migrations
                         .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("ProviderReference")
-                        .HasColumnType("nvarchar(max)");
+                        .HasColumnType("nvarchar(450)");
 
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("BookingId");
+
+                    b.HasIndex("ProviderReference")
+                        .IsUnique()
+                        .HasFilter("[ProviderReference] IS NOT NULL");
 
                     b.ToTable("Payments");
                 });
@@ -697,12 +718,17 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.Property<string>("Token")
                         .IsRequired()
-                        .HasColumnType("nvarchar(max)");
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
 
                     b.Property<Guid>("UserId")
                         .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("Token");
+
+                    b.HasIndex("UserId");
 
                     b.ToTable("RefreshTokens", (string)null);
                 });
@@ -1034,7 +1060,7 @@ namespace EventEase.Infrastructure.Migrations
 
                     b.Property<string>("Email")
                         .IsRequired()
-                        .HasColumnType("nvarchar(max)");
+                        .HasColumnType("nvarchar(450)");
 
                     b.Property<bool>("EmailNotifications")
                         .HasColumnType("bit");
@@ -1097,6 +1123,9 @@ namespace EventEase.Infrastructure.Migrations
                         .HasColumnType("int");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("Email")
+                        .IsUnique();
 
                     b.ToTable("Users");
                 });

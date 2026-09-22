@@ -111,6 +111,26 @@ namespace EventEase.Api.Controllers
             return Ok(new { success = true, data = invoices });
         }
 
+        /// <summary>
+        /// The invoice for one booking.
+        /// </summary>
+        /// <remarks>
+        /// Two things were wrong here, and both are worth stating because the
+        /// fix changes what callers get back.
+        ///
+        /// It was [Authorize] with no ownership check, so any signed-in user
+        /// could read any booking's invoice by guessing an id — every booking
+        /// on the platform, from any account. It now serves the booking's own
+        /// customer, the vendor fulfilling it, and support or admin. Anyone
+        /// else gets a 404 rather than a 403, so the endpoint cannot be used
+        /// to discover which booking ids exist.
+        ///
+        /// It also answered the vendor's settlement statement — platform fee,
+        /// TDS and net payout — to whoever called it, which told customers
+        /// exactly what the platform takes and what their vendor nets. The
+        /// customer now gets what they were charged; the payout breakdown
+        /// stays with the vendor, support and admin.
+        /// </remarks>
         [Authorize]
         [HttpGet("api/v1/invoices/{id}/download")]
         public async Task<IActionResult> DownloadInvoice(Guid id)
@@ -121,18 +141,110 @@ namespace EventEase.Api.Controllers
                 return NotFound(new { error = "Booking not found." });
             }
 
-            var customer = await _db.Users.FirstOrDefaultAsync(u => u.Id == booking.UserId);
-            var vendor = await _db.Vendors.FirstOrDefaultAsync(v => v.Id == booking.VendorId);
+            var userId = GetUserId();
+            if (userId == Guid.Empty)
+            {
+                return Unauthorized(new { error = "Unauthorized", details = "User ID not found in token claims." });
+            }
 
+            var isStaff = HasAnyRole(AuthRoles.Admin, AuthRoles.Support);
+            var isCustomer = booking.UserId == userId;
+
+            // A vendor account is not the vendor row: the booking points at the
+            // vendor, which points back at the user.
+            var vendor = await _db.Vendors.FirstOrDefaultAsync(v => v.Id == booking.VendorId);
+            var isVendor = vendor != null && vendor.UserId == userId;
+
+            if (!isStaff && !isCustomer && !isVendor)
+            {
+                // Deliberately the same answer as a booking that does not
+                // exist. A 403 here would confirm the id is real.
+                return NotFound(new { error = "Booking not found." });
+            }
+
+            var customer = await _db.Users.FirstOrDefaultAsync(u => u.Id == booking.UserId);
+            var reference = booking.Id.ToString().Substring(0, 8).ToUpper();
+
+            var content = isCustomer && !isStaff && !isVendor
+                ? BuildCustomerReceipt(booking, customer, vendor, reference)
+                : BuildSettlementStatement(booking, customer, vendor, reference);
+
+            var bytes = System.Text.Encoding.UTF8.GetBytes(content);
+            var prefix = isCustomer && !isStaff && !isVendor ? "Receipt" : "Invoice";
+            return File(bytes, "text/plain", $"{prefix}-{reference}.txt");
+        }
+
+        /// <summary>What the customer paid, with no platform or payout figures.</summary>
+        private static string BuildCustomerReceipt(
+            Core.Entities.Booking booking,
+            Core.Entities.User? customer,
+            Core.Entities.Vendor? vendor,
+            string reference)
+        {
+            decimal baseAmount = Math.Round((booking.TotalAmount - booking.DamageCharges) / 1.18m, 2);
+            decimal gst = Math.Round(booking.TotalAmount - booking.DamageCharges - baseAmount, 2);
+            decimal balance = Math.Max(0m, booking.TotalAmount - booking.AdvanceAmount);
+
+            var lines = new List<string>
+            {
+                "==================================================",
+                "               JOINEVENTS RECEIPT",
+                "==================================================",
+                $"Receipt No:      RCP-{reference}",
+                $"Booking ID:      {booking.Id}",
+                $"Date:            {DateTime.UtcNow:yyyy-MM-dd}",
+                $"Event:           {booking.EventName}",
+                "--------------------------------------------------",
+                $"Customer:        {customer?.Name ?? "Customer"}",
+                $"Vendor:          {vendor?.BusinessName ?? "Vendor"}",
+                $"Venue:           {booking.Venue}, {booking.City}",
+                "--------------------------------------------------",
+                $"Package & services: INR {baseAmount:N2}"
+            };
+
+            if (booking.DamageCharges > 0)
+            {
+                lines.Add($"Damage charges:     INR {booking.DamageCharges:N2}");
+            }
+
+            lines.Add($"GST (18%):          INR {gst:N2}");
+            lines.Add($"Total:              INR {booking.TotalAmount:N2}");
+            lines.Add("--------------------------------------------------");
+            lines.Add($"Advance paid:       INR {booking.AdvanceAmount:N2}");
+
+            if (balance > 0)
+            {
+                lines.Add($"Balance due:        INR {balance:N2}");
+            }
+
+            if (booking.RefundAmount > 0)
+            {
+                lines.Add($"Refunded:           INR {booking.RefundAmount:N2}");
+            }
+
+            lines.Add("--------------------------------------------------");
+            lines.Add("Thank you for using JoinEvents!");
+            lines.Add("==================================================");
+
+            return string.Join(Environment.NewLine, lines) + Environment.NewLine;
+        }
+
+        /// <summary>The settlement view: what the platform took and the vendor nets.</summary>
+        private static string BuildSettlementStatement(
+            Core.Entities.Booking booking,
+            Core.Entities.User? customer,
+            Core.Entities.Vendor? vendor,
+            string reference)
+        {
             decimal platformFee = booking.PlatformFeeAmount > 0 ? booking.PlatformFeeAmount : Math.Round(booking.TotalAmount * 0.10m, 2);
             decimal tds = booking.TdsDeducted > 0 ? booking.TdsDeducted : Math.Round(booking.TotalAmount * 0.01m, 2);
             decimal netPayout = booking.VendorPayoutAmount > 0 ? booking.VendorPayoutAmount : Math.Round(booking.TotalAmount - platformFee - tds, 2);
 
-            string invoiceContent = $@"
+            return $@"
 ==================================================
                  JOINEVENTS INVOICE
 ==================================================
-Invoice ID:      INV-{booking.Id.ToString().Substring(0, 8).ToUpper()}
+Invoice ID:      INV-{reference}
 Booking ID:      {booking.Id}
 Date:            {DateTime.UtcNow:yyyy-MM-dd}
 Event:           {booking.EventName}
@@ -149,8 +261,14 @@ Net Vendor Payout: INR {netPayout:N2}
 Thank you for using JoinEvents!
 ==================================================
 ";
-            var bytes = System.Text.Encoding.UTF8.GetBytes(invoiceContent);
-            return File(bytes, "text/plain", $"Invoice-{booking.Id.ToString().Substring(0, 8).ToUpper()}.txt");
+        }
+
+        /// <summary>True when the caller holds any of the given roles.</summary>
+        private bool HasAnyRole(params string[] roles)
+        {
+            var role = User.FindFirstValue(ClaimTypes.Role) ?? User.FindFirstValue("role");
+            return !string.IsNullOrEmpty(role)
+                && roles.Any(r => role.Equals(r, StringComparison.OrdinalIgnoreCase));
         }
     }
 }

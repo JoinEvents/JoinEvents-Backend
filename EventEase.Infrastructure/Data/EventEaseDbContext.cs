@@ -38,6 +38,7 @@ namespace EventEase.Infrastructure.Data
         public DbSet<TierPriceRange> TierPriceRanges { get; set; }
         public DbSet<VendorBlockedDate> VendorBlockedDates { get; set; }
         public DbSet<AuditLog> AuditLogs { get; set; }
+        public DbSet<GuaranteeClaim> GuaranteeClaims { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -48,6 +49,22 @@ namespace EventEase.Infrastructure.Data
                 .HasForeignKey(s => s.VendorId);
 
             base.OnModelCreating(modelBuilder);
+
+            // Protection claims. Money columns get the same precision as every
+            // other amount, and a claim is found by booking or by either party,
+            // which is what the three indexes are for.
+            modelBuilder.Entity<GuaranteeClaim>(entity =>
+            {
+                entity.Property(c => c.RefundAmount).HasPrecision(18, 2);
+                entity.Property(c => c.CompensationAmount).HasPrecision(18, 2);
+                entity.HasIndex(c => c.BookingId);
+                entity.HasIndex(c => c.CustomerId);
+                entity.HasIndex(c => c.VendorId);
+                entity.HasOne(c => c.Booking)
+                      .WithMany()
+                      .HasForeignKey(c => c.BookingId)
+                      .OnDelete(DeleteBehavior.Cascade);
+            });
 
             modelBuilder.Entity<BookingService>(entity =>
             {

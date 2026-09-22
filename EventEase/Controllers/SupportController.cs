@@ -159,6 +159,53 @@ namespace EventEase.Api.Controllers
             return Ok(await MapToTicketResponseAsync(ticket, IsAgent()));
         }
 
+        /// <summary>
+        /// Reopens a ticket the caller raised.
+        /// </summary>
+        /// <remarks>
+        /// Status and priority as a whole stay with support, but a customer
+        /// whose problem was not actually solved had no way to say so: the
+        /// Reopen button on the web calls the agent-only status endpoint and
+        /// answers 403 for the person it is shown to. This gives the author
+        /// exactly that one move, on a ticket that is already finished, and
+        /// nothing else.
+        /// </remarks>
+        [Authorize(Policy = "User")]
+        [HttpPost("tickets/{id:guid}/reopen")]
+        public async Task<IActionResult> ReopenTicket(Guid id)
+        {
+            var userId = GetUserId();
+            if (userId == Guid.Empty)
+            {
+                return Unauthorized(new { error = "Unauthorized", details = "User ID not found in token claims." });
+            }
+
+            var ticket = await _db.SupportTickets.FindAsync(id);
+            if (ticket is null) return NotFound(new { error = "Ticket not found." });
+
+            // An agent reopening somebody's ticket goes through the status
+            // endpoint; this one is only for the person who raised it.
+            if (ticket.UserId != userId && !IsAgent())
+            {
+                return NotFound(new { error = "Ticket not found." });
+            }
+
+            var status = ticket.Status ?? string.Empty;
+            var finished = status.Equals("Resolved", StringComparison.OrdinalIgnoreCase)
+                        || status.Equals("Closed", StringComparison.OrdinalIgnoreCase);
+
+            if (!finished)
+            {
+                return BadRequest(new { error = "This ticket is already open." });
+            }
+
+            ticket.Status = "Open";
+            ticket.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
+
+            return Ok(await MapToTicketResponseAsync(ticket, IsAgent()));
+        }
+
         [Authorize(Policy = "SupportOrAdmin")]
         [HttpPatch("tickets/{id:guid}/status")]
         public async Task<IActionResult> UpdateStatusPath(Guid id, [FromBody] UpdateTicketDto dto)

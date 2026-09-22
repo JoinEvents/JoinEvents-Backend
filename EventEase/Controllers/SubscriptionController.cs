@@ -67,6 +67,21 @@ namespace EventEase.Api.Controllers
             return Ok(new { success = true, data = sub });
         }
 
+        /// <summary>
+        /// Every plan on offer, so a vendor can see what they are not on.
+        /// </summary>
+        /// <remarks>
+        /// GET /vendor/subscription describes only the plan you already hold.
+        /// Without this a client wanting to draw a comparison had to hardcode
+        /// the prices, which the mobile app did, leaving two places to update.
+        /// </remarks>
+        [Authorize(Policy = "Vendor")]
+        [HttpGet("tiers")]
+        public IActionResult GetTiers()
+        {
+            return Ok(new { success = true, data = Catalogue });
+        }
+
         [Authorize(Policy = "Vendor")]
         [HttpPost("upgrade")]
         public async Task<IActionResult> Upgrade([FromBody] UpgradeRequest req)
@@ -80,7 +95,7 @@ namespace EventEase.Api.Controllers
             var vendor = await GetOrCreateVendor(userId);
 
             string requestedTier = req.tier.ToLower();
-            if (requestedTier != "pro" && requestedTier != "premium" && requestedTier != "free")
+            if (!Catalogue.Any(t => t.tier == requestedTier))
             {
                 return BadRequest(new { error = "Unsupported subscription tier." });
             }
@@ -148,15 +163,81 @@ namespace EventEase.Api.Controllers
             return Ok(new { success = true, data = history });
         }
 
+        /// <summary>
+        /// What each plan costs and grants.
+        /// </summary>
+        /// <remarks>
+        /// Stated once, because it used to be a row of ternaries inside the
+        /// mapper and nowhere else — so no client could show a vendor what a
+        /// plan they were not on would cost, and the mobile app had to carry
+        /// its own copy of these numbers to draw the comparison. Changing a
+        /// price here now changes it everywhere.
+        /// </remarks>
+        private static readonly IReadOnlyList<TierOffer> Catalogue = new[]
+        {
+            new TierOffer
+            {
+                tier = "free",
+                name = "Free",
+                priceMonthly = 0m,
+                priceYearly = 0m,
+                maxActiveListings = 3,
+                featuredListings = 0,
+                prioritySupport = false,
+                analyticsAccess = "basic",
+                commissionDiscount = 0.0m,
+                badgeType = "none"
+            },
+            new TierOffer
+            {
+                tier = "pro",
+                name = "Pro",
+                priceMonthly = 999m,
+                priceYearly = 9990m,
+                maxActiveListings = 10,
+                featuredListings = 1,
+                prioritySupport = false,
+                analyticsAccess = "advanced",
+                commissionDiscount = 0.01m,
+                badgeType = "pro"
+            },
+            new TierOffer
+            {
+                tier = "premium",
+                name = "Premium",
+                priceMonthly = 2999m,
+                priceYearly = 29990m,
+                maxActiveListings = 999,
+                featuredListings = 5,
+                prioritySupport = true,
+                analyticsAccess = "premium",
+                commissionDiscount = 0.02m,
+                badgeType = "premium"
+            }
+        };
+
+        public class TierOffer
+        {
+            public string tier { get; set; } = string.Empty;
+            public string name { get; set; } = string.Empty;
+            public decimal priceMonthly { get; set; }
+            public decimal priceYearly { get; set; }
+            public int maxActiveListings { get; set; }
+            public int featuredListings { get; set; }
+            public bool prioritySupport { get; set; }
+            public string analyticsAccess { get; set; } = string.Empty;
+            public decimal commissionDiscount { get; set; }
+            public string badgeType { get; set; } = string.Empty;
+        }
+
+        private static TierOffer OfferFor(string? tier) =>
+            Catalogue.FirstOrDefault(t => t.tier.Equals(tier ?? "free", StringComparison.OrdinalIgnoreCase))
+            ?? Catalogue[0];
+
         private object MapSubscription(Core.Entities.Vendor vendor)
         {
             string tier = vendor.SubscriptionTier ?? "free";
-            decimal priceMonthly = tier == "premium" ? 2999m : (tier == "pro" ? 999m : 0m);
-            decimal priceYearly = tier == "premium" ? 29990m : (tier == "pro" ? 9990m : 0m);
-            int maxListings = tier == "premium" ? 999 : (tier == "pro" ? 10 : 3);
-            int featured = tier == "premium" ? 5 : (tier == "pro" ? 1 : 0);
-            string analytics = tier == "premium" ? "premium" : (tier == "pro" ? "advanced" : "basic");
-            decimal discount = tier == "premium" ? 0.02m : (tier == "pro" ? 0.01m : 0.0m);
+            var offer = OfferFor(tier);
             string badge = vendor.SubscriptionBadge ?? "none";
             string status = vendor.SubscriptionExpiry.HasValue && vendor.SubscriptionExpiry.Value < DateTime.UtcNow ? "expired" : "active";
 
@@ -164,14 +245,14 @@ namespace EventEase.Api.Controllers
             {
                 vendorId = vendor.Id.ToString(),
                 tier = tier,
-                priceMonthly = priceMonthly,
-                priceYearly = priceYearly,
-                maxActiveListings = maxListings,
-                featuredListings = featured,
-                prioritySupport = tier == "premium",
-                analyticsAccess = analytics,
+                priceMonthly = offer.priceMonthly,
+                priceYearly = offer.priceYearly,
+                maxActiveListings = offer.maxActiveListings,
+                featuredListings = offer.featuredListings,
+                prioritySupport = offer.prioritySupport,
+                analyticsAccess = offer.analyticsAccess,
                 badgeType = badge,
-                commissionDiscount = discount,
+                commissionDiscount = offer.commissionDiscount,
                 startDate = vendor.CreatedAt.ToString("o"),
                 renewalDate = vendor.SubscriptionExpiry?.ToString("o") ?? "",
                 status = status

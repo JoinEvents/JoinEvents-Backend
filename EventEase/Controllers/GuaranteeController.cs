@@ -1,13 +1,14 @@
+using EventEase.Core.Entities;
 using EventEase.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Claims;
 using System.IdentityModel.Tokens.Jwt;
+using System.Text.Json;
 using System.Threading.Tasks;
 
 namespace EventEase.Api.Controllers
@@ -17,9 +18,6 @@ namespace EventEase.Api.Controllers
     public class GuaranteeController : ControllerBase
     {
         private readonly EventEaseDbContext _db;
-
-        // In-memory store for claims
-        private static readonly ConcurrentBag<GuaranteeClaim> _claims = new ConcurrentBag<GuaranteeClaim>();
 
         public GuaranteeController(EventEaseDbContext db)
         {
@@ -46,7 +44,12 @@ namespace EventEase.Api.Controllers
             public int timelineHours { get; set; }
         }
 
-        public class GuaranteeClaim
+        /// <summary>
+        /// The wire shape of a claim. Lowercase members, because the API
+        /// serialises with PropertyNamingPolicy = null and both apps already
+        /// read these names.
+        /// </summary>
+        public class GuaranteeClaimResponse
         {
             public string id { get; set; }
             public string bookingId { get; set; }
@@ -133,62 +136,128 @@ namespace EventEase.Api.Controllers
                 return NotFound(new { error = "Booking not found." });
             }
 
+            // Only the customer on the booking may claim against it. Without
+            // this any signed-in user could raise a claim on somebody else's
+            // booking and flip its guarantee status.
+            if (booking.UserId != userId)
+            {
+                return NotFound(new { error = "Booking not found." });
+            }
+
             // Calculate potential refund / compensation
             decimal? refundAmount = booking.TotalAmount;
             decimal? compAmount = req.claimType.ToLower() == "no_show" ? 10000m : 0m;
 
             var claim = new GuaranteeClaim
             {
-                id = Guid.NewGuid().ToString(),
-                bookingId = req.bookingId,
-                customerId = userId.ToString(),
-                vendorId = booking.VendorId.ToString(),
-                claimType = req.claimType,
-                reason = req.reason,
-                evidence = req.evidence ?? new List<string>(),
-                status = "submitted",
-                refundAmount = refundAmount,
-                compensationAmount = compAmount,
-                submittedAt = DateTime.UtcNow.ToString("o")
+                Id = Guid.NewGuid(),
+                BookingId = bookingGuid,
+                CustomerId = userId,
+                VendorId = booking.VendorId,
+                ClaimType = req.claimType,
+                Reason = req.reason,
+                EvidenceJson = JsonSerializer.Serialize(req.evidence ?? new List<string>()),
+                Status = "submitted",
+                RefundAmount = refundAmount,
+                CompensationAmount = compAmount,
+                SubmittedAt = DateTime.UtcNow
             };
+
+            _db.GuaranteeClaims.Add(claim);
 
             // Update booking status if needed
             booking.GuaranteeStatus = "claimed";
             _db.Bookings.Update(booking);
+
+            // One save, so a claim and the flag on its booking cannot disagree.
             await _db.SaveChangesAsync();
 
-            _claims.Add(claim);
-
-            return Ok(new { success = true, data = claim });
+            return Ok(new { success = true, data = MapClaim(claim) });
         }
 
         [Authorize(Policy = "User")]
         [HttpGet("claims")]
-        public IActionResult GetClaims()
+        public async Task<IActionResult> GetClaims()
         {
-            var userId = GetUserId().ToString();
-            var userClaims = _claims.Where(c => c.customerId == userId || c.vendorId == userId).ToList();
+            var userId = GetUserId();
 
-            return Ok(new { success = true, data = userClaims });
+            // A vendor account is not the vendor row the booking points at, so
+            // their own claims are found through it.
+            var vendorId = await _db.Vendors
+                .Where(v => v.UserId == userId)
+                .Select(v => (Guid?)v.Id)
+                .FirstOrDefaultAsync();
+
+            var claims = await _db.GuaranteeClaims
+                .Where(c => c.CustomerId == userId || (vendorId != null && c.VendorId == vendorId))
+                .OrderByDescending(c => c.SubmittedAt)
+                .ToListAsync();
+
+            return Ok(new { success = true, data = claims.Select(MapClaim).ToList() });
         }
 
         [Authorize(Policy = "User")]
         [HttpGet("claim/{id}")]
-        public IActionResult GetClaimById(string id)
+        public async Task<IActionResult> GetClaimById(string id)
         {
-            var claim = _claims.FirstOrDefault(c => c.id == id);
+            if (!Guid.TryParse(id, out var claimId))
+            {
+                return NotFound(new { error = "Claim not found." });
+            }
+
+            var claim = await _db.GuaranteeClaims.FirstOrDefaultAsync(c => c.Id == claimId);
             if (claim == null)
             {
                 return NotFound(new { error = "Claim not found." });
             }
 
-            var userId = GetUserId().ToString();
-            if (claim.customerId != userId && claim.vendorId != userId)
+            var userId = GetUserId();
+            var vendorId = await _db.Vendors
+                .Where(v => v.UserId == userId)
+                .Select(v => (Guid?)v.Id)
+                .FirstOrDefaultAsync();
+
+            if (claim.CustomerId != userId && claim.VendorId != vendorId)
             {
-                return Unauthorized(new { error = "Unauthorized access to claim." });
+                // Same answer as a claim that does not exist, so the endpoint
+                // cannot be used to discover claim ids.
+                return NotFound(new { error = "Claim not found." });
             }
 
-            return Ok(new { success = true, data = claim });
+            return Ok(new { success = true, data = MapClaim(claim) });
+        }
+
+        /// <summary>Turns a stored claim into the shape the apps read.</summary>
+        private static GuaranteeClaimResponse MapClaim(GuaranteeClaim claim) => new()
+        {
+            id = claim.Id.ToString(),
+            bookingId = claim.BookingId.ToString(),
+            customerId = claim.CustomerId.ToString(),
+            vendorId = claim.VendorId.ToString(),
+            claimType = claim.ClaimType,
+            reason = claim.Reason,
+            evidence = ParseEvidence(claim.EvidenceJson),
+            status = claim.Status,
+            refundAmount = claim.RefundAmount,
+            compensationAmount = claim.CompensationAmount,
+            submittedAt = claim.SubmittedAt.ToString("o"),
+            resolvedAt = claim.ResolvedAt?.ToString("o"),
+            resolution = claim.Resolution
+        };
+
+        /// <summary>Evidence URLs, or none at all if the column will not parse.</summary>
+        private static List<string> ParseEvidence(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return new List<string>();
+
+            try
+            {
+                return JsonSerializer.Deserialize<List<string>>(json) ?? new List<string>();
+            }
+            catch (JsonException)
+            {
+                return new List<string>();
+            }
         }
     }
 }
