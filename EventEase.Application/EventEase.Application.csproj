@@ -7,7 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <!-- Pinned to the last version whose Azure.Core requirement (1.47.3) matches what
+         Azure.Storage.Blobs already brings. 1.17+ wants Azure.Core 1.50+, which depends on
+         Microsoft.Extensions.* 10.x and collides with this solution's 8.x pins (NU1605). -->
+    <PackageReference Include="Azure.Identity" Version="1.16.0" />
     <PackageReference Include="Azure.Storage.Blobs" Version="12.26.0" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
     <PackageReference Include="Google.Cloud.Storage.V1" Version="4.11.0" />
