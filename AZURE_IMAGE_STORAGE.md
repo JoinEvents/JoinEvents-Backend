@@ -110,8 +110,12 @@ Startup **fails** in Production if neither `AzureStorage__AccountName` nor
 `AzureStorage__ConnectionString` is set — an API that accepts pictures with nowhere to put them
 is worse than one that refuses to boot.
 
-`Storage__Provider=Gcp` restores the previous Google Cloud Storage path unchanged, so this can
-be rolled back with one setting.
+`Storage__Provider=Gcp` restores the previous Google Cloud Storage path, so this can be rolled
+back with one setting. Note that even on that path there is no local-disk storage: documents go
+to GCS objects, not to the container filesystem.
+
+There is no local-disk implementation at all any more. Every upload path, under either provider,
+writes to object storage.
 
 ### Local development
 

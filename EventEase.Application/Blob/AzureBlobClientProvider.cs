@@ -136,16 +136,9 @@ namespace EventEase.Application.Blob
             if (string.IsNullOrWhiteSpace(blobName))
                 return string.Empty;
 
-            // Anything already absolute is a legacy value stored as a full URL. Pass it back.
-            if (blobName.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                blobName.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-            {
-                return blobName;
-            }
-
-            // Rows written before object storage hold "/files/..." paths served by the API's own
-            // static file middleware. They are already usable as-is.
-            if (blobName.StartsWith("/", StringComparison.Ordinal))
+            // A legacy value stored as a full URL, or as a "/files/..." path the API still
+            // serves, is already loadable. Hand it back untouched.
+            if (StoragePaths.IsAlreadyResolvable(blobName))
                 return blobName;
 
             if (publicAccess)

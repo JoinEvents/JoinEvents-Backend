@@ -29,7 +29,7 @@ namespace EventEase.Application.Blob
 
             // The extension is attacker-controlled, so it is whitelisted rather than trusted. The
             // callers that serve images back (avatars, package galleries) also check magic bytes.
-            var extension = SanitizeExtension(Path.GetExtension(file.FileName));
+            var extension = StoragePaths.SanitizeExtension(Path.GetExtension(file.FileName));
             var prefix = string.IsNullOrWhiteSpace(userId) ? "shared" : userId;
             var blobName = $"{prefix}/{Guid.NewGuid()}{extension}";
 
@@ -88,16 +88,5 @@ namespace EventEase.Application.Blob
         public Task<string> GetUrlAsync(string blobName) => _provider.GetMediaUrlAsync(blobName);
 
         public string? TryResolveBlobName(string? url) => _provider.TryResolveMediaBlobName(url);
-
-        private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
-        {
-            ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".pdf", ".doc", ".docx", ".xls", ".xlsx"
-        };
-
-        private static string SanitizeExtension(string? extension)
-        {
-            if (string.IsNullOrWhiteSpace(extension)) return string.Empty;
-            return AllowedExtensions.Contains(extension) ? extension.ToLowerInvariant() : ".bin";
-        }
     }
 }

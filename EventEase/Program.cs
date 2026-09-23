@@ -278,8 +278,9 @@ var storageProvider = builder.Configuration["Storage:Provider"] ?? "Azure";
 
 if (storageProvider.Equals("Gcp", StringComparison.OrdinalIgnoreCase))
 {
+    builder.Services.AddSingleton<GcsClientProvider>();
     builder.Services.AddSingleton<IBlobService, GcpBucketService>();
-    builder.Services.AddScoped<IFileStorage, LocalFileStorage>();
+    builder.Services.AddSingleton<IFileStorage, GcsFileStorage>();
 }
 else
 {
@@ -380,7 +381,9 @@ app.Use(async (context, next) =>
 app.UseSerilogRequestLogging();
 app.UseStaticFiles();
 
-// Vendor documents written by LocalFileStorage are served from /files.
+// Legacy only. Nothing writes here any more — every upload goes to object storage — but rows
+// written before that move still hold "/files/..." paths, so the route stays for as long as any
+// of those files survive on the instance that wrote them.
 var storagePath = Path.Combine(builder.Environment.ContentRootPath, "storage");
 Directory.CreateDirectory(storagePath);
 app.UseStaticFiles(new StaticFileOptions
