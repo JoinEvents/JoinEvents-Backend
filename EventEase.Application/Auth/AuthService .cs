@@ -368,6 +368,15 @@ namespace EventEase.Application.Auth
             if (dto.smsNotifications != null) user.SmsNotifications = dto.smsNotifications.Value;
 
             var vendor = await _db.Vendors.FirstOrDefaultAsync(v => v.UserId == userId);
+            // A vendor signed up through a path that never created the vendor record (e.g. social
+            // login) would otherwise have their business details silently dropped, and could
+            // never pass CreatePackage's "complete business profile" check.
+            if (vendor == null && (dto.businessName != null || dto.description != null)
+                && string.Equals(user.Role, "Vendor", StringComparison.OrdinalIgnoreCase))
+            {
+                vendor = new Vendor { Id = Guid.NewGuid(), UserId = userId, IsValidated = false, CreatedAt = DateTime.UtcNow };
+                _db.Vendors.Add(vendor);
+            }
             if (vendor != null)
             {
                 if (dto.businessName != null) vendor.BusinessName = dto.businessName;
