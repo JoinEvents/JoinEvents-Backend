@@ -31,6 +31,7 @@ namespace EventEase.Api.Controllers
             [FromQuery] int? maxGuests,
             [FromQuery] string? query,
             [FromQuery] string? sortBy,
+            [FromQuery] string? tier,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 20)
         {
@@ -38,6 +39,10 @@ namespace EventEase.Api.Controllers
             {
                 var packagesQuery = _db.Packages
                     .Where(p => p.IsActive && p.IsVerified);
+
+                // A package's pricing tier is stored as its Theme (the tier's name).
+                if (!string.IsNullOrWhiteSpace(tier))
+                    packagesQuery = packagesQuery.Where(p => p.Theme == tier);
 
                 // Apply Filters
                 if (!string.IsNullOrEmpty(city))
