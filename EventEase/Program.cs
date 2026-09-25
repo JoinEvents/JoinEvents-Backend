@@ -170,6 +170,14 @@ builder.Services.AddRateLimiter(options =>
             QueueLimit = 0
         }));
 
+    options.AddPolicy(RateLimitPolicies.Assistant, http =>
+        RateLimitPartition.GetFixedWindowLimiter(ClientKey(http), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 20,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+        }));
+
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(http =>
         RateLimitPartition.GetFixedWindowLimiter(ClientKey(http), _ => new FixedWindowRateLimiterOptions
         {
@@ -268,6 +276,10 @@ builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<EventEase.Application.Categories.IEventCategoryService, EventEase.Application.Categories.EventCategoryService>();
 builder.Services.AddScoped<EventEase.Application.SupportTicket.ISupportService, EventEase.Application.SupportTicket.SupportService>();
 builder.Services.AddScoped<ILoyaltyService, LoyaltyService>();
+// Roshi, the customer assistant: tools and rules per request; the Claude client is shared.
+builder.Services.AddScoped<EventEase.Api.Assistant.RoshiTools>();
+builder.Services.AddScoped<EventEase.Api.Assistant.RoshiRules>();
+builder.Services.AddSingleton<EventEase.Api.Assistant.RoshiClaude>();
 builder.Services.AddScoped<ITierService, TierService>();
 // --- Object storage -------------------------------------------------------------------
 // Uploads (avatars, package galleries, verification documents, support attachments) go to

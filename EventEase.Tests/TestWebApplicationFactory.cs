@@ -45,6 +45,9 @@ namespace EventEase.Tests
                 "Server=(localdb)\\test;Database=EventEaseTests;Trusted_Connection=True;");
 
             Environment.SetEnvironmentVariable("Database__MigrateOnStartup", "false");
+
+            // Tests exercise the assistant's rules engine; never call a paid model from CI.
+            Environment.SetEnvironmentVariable("Assistant__Claude", "off");
             Environment.SetEnvironmentVariable("Database__SeedDemoData", "false");
         }
 
