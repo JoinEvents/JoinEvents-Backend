@@ -11,7 +11,7 @@ namespace EventEase.Application.Vendors
         Task<VendorDocument?> ReviewDocumentAsync(Guid docId, Guid adminId, ReviewDocumentDto dto);
         Task<bool> ModerateVendorAsync(Guid vendorId, Guid adminId, ModerateVendorDto dto);
         Task<VendorAnalyticsResponse> GetAnalyticsAsync(Guid vendorId);
-        Task<object> GetAnalyticsForFrontendAsync(Guid vendorId);
+        Task<object> GetAnalyticsForFrontendAsync(Guid userId);
         Task<List<object>> GetAllVendorsForAdminAsync();
     }
 }

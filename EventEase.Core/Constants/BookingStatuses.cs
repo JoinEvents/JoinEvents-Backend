@@ -46,13 +46,36 @@ namespace EventEase.Core.Constants
                 [Cancelled] = Array.Empty<string>()
             };
 
-        /// <summary>Returns the canonical spelling of a status, or null if it is not recognised.</summary>
+        /// <summary>
+        /// Returns the canonical spelling of a status, or null if it is not recognised. Accepts the
+        /// apps' spelling too ("in_progress", "advance_paid"), so a status read from the API can be
+        /// sent back to it.
+        /// </summary>
         public static string? Normalize(string? status)
         {
             if (string.IsNullOrWhiteSpace(status)) return null;
 
-            return All.FirstOrDefault(s => s.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase));
+            var key = Compact(status);
+            if (key == "advancepaid") return Paid;
+            return All.FirstOrDefault(s => Compact(s) == key);
         }
+
+        /// <summary>
+        /// The status as the web and mobile apps name it: a paid booking waiting for the vendor to
+        /// confirm it is "advance_paid", a vendor-accepted booking still waiting for the customer's
+        /// payment is "pending", and multi-word statuses are snake_case ("in_progress").
+        /// </summary>
+        public static string ToClient(string? status) => Normalize(status) switch
+        {
+            Paid => "advance_paid",
+            Accepted => "pending",
+            InProgress => "in_progress",
+            null => (status ?? string.Empty).Trim().ToLowerInvariant(),
+            var known => known.ToLowerInvariant()
+        };
+
+        private static string Compact(string value) =>
+            new string(value.Where(char.IsLetter).ToArray()).ToLowerInvariant();
 
         public static readonly string[] All =
         {

@@ -13,6 +13,8 @@ namespace EventEase.Tests
         [InlineData("pending", "Pending")]
         [InlineData("SETTLED", "Settled")]
         [InlineData("  Confirmed  ", "Confirmed")]
+        [InlineData("in_progress", "InProgress")]
+        [InlineData("advance_paid", "Paid")]
         public void Normalize_AcceptsKnownStatusesCaseInsensitively(string input, string expected)
         {
             Assert.Equal(expected, BookingStatuses.Normalize(input));
@@ -25,6 +27,17 @@ namespace EventEase.Tests
         public void Normalize_RejectsUnknownStatuses(string? input)
         {
             Assert.Null(BookingStatuses.Normalize(input));
+        }
+
+        [Theory]
+        [InlineData("Paid", "advance_paid")]
+        [InlineData("Accepted", "pending")]
+        [InlineData("InProgress", "in_progress")]
+        [InlineData("Confirmed", "confirmed")]
+        [InlineData("Settled", "settled")]
+        public void ToClient_UsesTheAppsStatusNames(string status, string expected)
+        {
+            Assert.Equal(expected, BookingStatuses.ToClient(status));
         }
 
         [Fact]

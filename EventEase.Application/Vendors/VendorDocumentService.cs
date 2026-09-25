@@ -178,48 +178,84 @@ namespace EventEase.Application.Vendors
         /// <summary>
         /// Returns vendor analytics in the format expected by the Angular frontend.
         /// </summary>
-        public async Task<object> GetAnalyticsForFrontendAsync(Guid vendorId)
+        /// <summary>
+        /// The vendor dashboard's analytics, from the vendor's own bookings and reviews. The caller
+        /// passes the signed-in user's id; bookings are keyed by the vendor record. This used to
+        /// query bookings by the user id (so it never found any) and filled every gap with invented
+        /// numbers — a fixed earnings curve, 87 completed jobs, a 4.5–4.9 rating trend.
+        /// </summary>
+        public async Task<object> GetAnalyticsForFrontendAsync(Guid userId)
         {
+            var vendor = await _db.Vendors.AsNoTracking().FirstOrDefaultAsync(v => v.UserId == userId);
+            var vendorIds = vendor is null ? new List<Guid> { userId } : new List<Guid> { vendor.Id, vendor.UserId };
             var currentYear = DateTime.UtcNow.Year;
 
-            var allBookings = await _db.Bookings
-                .Where(b => b.VendorId == vendorId)
+            var bookings = await _db.Bookings
+                .AsNoTracking()
+                .Where(b => vendorIds.Contains(b.VendorId))
                 .ToListAsync();
 
+            static bool Is(Booking b, string status) => string.Equals(b.Status, status, StringComparison.OrdinalIgnoreCase);
+            var earned = new[] { "Paid", "Confirmed", "InProgress", "Completed", "Settled" };
+
             var monthlyEarnings = new decimal[12];
-            foreach (var b in allBookings.Where(b => b.Status == "Paid" && b.EventDate.Year == currentYear))
+            foreach (var b in bookings.Where(b => b.EventDate.Year == currentYear && earned.Any(e => Is(b, e))))
             {
-                var idx = b.EventDate.Month - 1;
-                if (idx >= 0 && idx < 12)
-                    monthlyEarnings[idx] += b.Amount;
+                monthlyEarnings[b.EventDate.Month - 1] += b.VendorPayoutAmount > 0 ? b.VendorPayoutAmount : b.TotalAmount;
             }
 
-            bool hasData = monthlyEarnings.Any(e => e > 0);
-            if (!hasData)
-                monthlyEarnings = new decimal[] { 40000, 50000, 65000, 45000, 80000, 95000, 70000, 110000, 85000, 120000, 150000, 180000 };
+            var reviews = vendor is null
+                ? new List<Review>()
+                : await _db.Reviews.AsNoTracking().Where(r => r.VendorId == vendor.Id && r.Status != "removed").ToListAsync();
+            var average = reviews.Count > 0 ? Math.Round(reviews.Average(r => r.Rating), 1) : 0d;
 
-            decimal totalEarnings = monthlyEarnings.Sum();
+            // The rating as it stood at the end of each month this year (0 before the first review).
+            var averageRatingTrend = Enumerable.Range(1, 12).Select(month =>
+            {
+                var monthEnd = new DateTime(currentYear, month, 1).AddMonths(1);
+                var upTo = reviews.Where(r => r.CreatedAt < monthEnd).ToList();
+                return upTo.Count > 0 ? Math.Round(upTo.Average(r => r.Rating), 1) : 0d;
+            }).ToArray();
 
-            var pendingCount = allBookings.Any() ? allBookings.Count(b => b.Status == BookingStatus.Pending.ToString()) : 4;
-            var acceptedCount = allBookings.Any() ? allBookings.Count(b => b.Status == BookingStatus.Accepted.ToString() || b.Status == BookingStatus.Paid.ToString()) : 3;
-            var declinedCount = allBookings.Any() ? allBookings.Count(b => b.Status == BookingStatus.Rejected.ToString() || b.Status == BookingStatus.Cancelled.ToString()) : 1;
-            var completedCount = allBookings.Any() ? allBookings.Count(b => b.Status == BookingStatus.Paid.ToString()) : 87;
-
-            var averageRatingTrend = new double[] { 4.5, 4.6, 4.6, 4.7, 4.7, 4.8, 4.8, 4.8, 4.9, 4.8, 4.9, 4.8 };
-
-            var topPackage = await _db.Packages
-                .Where(p => p.VendorId == vendorId)
-                .FirstOrDefaultAsync();
-
-            object topPerformingService = topPackage != null
-                ? new { name = topPackage.Name, description = topPackage.Description ?? "Premium service package", rating = 4.9, totalReviews = completedCount }
-                : new { name = "Premium Event Package", description = "Top-rated event service bundle", rating = 4.9, totalReviews = 38 };
+            // The vendor's most-booked package, with its real booking count and rating.
+            object? topPerformingService = null;
+            var topPackageId = bookings.Where(b => b.PackageId.HasValue && earned.Any(e => Is(b, e)))
+                .GroupBy(b => b.PackageId!.Value)
+                .OrderByDescending(g => g.Count())
+                .Select(g => (Guid?)g.Key)
+                .FirstOrDefault();
+            if (topPackageId is { } packageId)
+            {
+                var package = await _db.Packages.AsNoTracking().FirstOrDefaultAsync(p => p.Id == packageId);
+                if (package is not null)
+                {
+                    var description = package.Description ?? string.Empty;
+                    var marker = description.IndexOf("---INCLUSION_DETAILS---", StringComparison.Ordinal);
+                    topPerformingService = new
+                    {
+                        name = package.Name,
+                        description = (marker >= 0 ? description[..marker] : description).Trim(),
+                        rating = package.Rating,
+                        totalReviews = package.TotalReviews,
+                        bookings = bookings.Count(b => b.PackageId == packageId)
+                    };
+                }
+            }
 
             return new
             {
-                totalEarnings = (long)totalEarnings,
+                totalEarnings = (long)monthlyEarnings.Sum(),
                 monthlyEarnings = monthlyEarnings.Select(e => (long)e).ToArray(),
-                bookingCountByStatus = new { pending = pendingCount, accepted = acceptedCount, declined = declinedCount, completed = completedCount },
+                bookingCountByStatus = new
+                {
+                    pending = bookings.Count(b => Is(b, "Pending") || Is(b, "Accepted")),
+                    toConfirm = bookings.Count(b => Is(b, "Paid")),
+                    accepted = bookings.Count(b => Is(b, "Confirmed") || Is(b, "InProgress")),
+                    declined = bookings.Count(b => Is(b, "Rejected") || Is(b, "Cancelled")),
+                    completed = bookings.Count(b => Is(b, "Completed") || Is(b, "Settled"))
+                },
+                averageRating = average,
+                totalReviews = reviews.Count,
                 averageRatingTrend,
                 topPerformingService
             };

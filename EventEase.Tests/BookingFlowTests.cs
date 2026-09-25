@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using EventEase.Application.Auth;
+using EventEase.Core.Constants;
 using EventEase.Core.Entities;
 using EventEase.Infrastructure.Data;
 using Microsoft.Extensions.DependencyInjection;
@@ -95,7 +97,7 @@ namespace EventEase.Tests
             var advance = await PayAsync(token, bookingId, payInFull: false);
             Assert.Equal(60_180m, advance.Amount);
             var afterAdvance = await SendAsync(HttpMethod.Get, $"/api/v1/bookings/{bookingId}", token);
-            Assert.Equal("confirmed", afterAdvance.Body.GetProperty("status").GetString());
+            Assert.Equal("advance_paid", afterAdvance.Body.GetProperty("status").GetString());
             Assert.Equal(60_180m, afterAdvance.Body.GetProperty("amountPaid").GetDecimal());
             Assert.Equal(140_420m, afterAdvance.Body.GetProperty("balanceDue").GetDecimal());
 
@@ -104,7 +106,7 @@ namespace EventEase.Tests
             Assert.Equal(140_420m, balance.Amount);
             var afterBalance = await SendAsync(HttpMethod.Get, $"/api/v1/bookings/{bookingId}", token);
             Assert.Equal(0m, afterBalance.Body.GetProperty("balanceDue").GetDecimal());
-            Assert.Equal("confirmed", afterBalance.Body.GetProperty("status").GetString());
+            Assert.Equal("advance_paid", afterBalance.Body.GetProperty("status").GetString());
 
             var again = await SendAsync(HttpMethod.Post, "/api/v1/payment/initiate", token,
                 new { bookingId, paymentMethod = "UPI" });
@@ -159,7 +161,106 @@ namespace EventEase.Tests
             Assert.Equal(HttpStatusCode.Forbidden, fetched.Status);
         }
 
+        [Fact]
+        public async Task Vendor_SeesPaidBooking_ConfirmsStartsAndCompletesIt()
+        {
+            var (vendorToken, package) = await RegisterVendorWithPackageAsync(maxGuests: 300);
+            var customer = await RegisterCustomerAsync();
+
+            var created = await SendAsync(HttpMethod.Post, "/api/v1/booking", customer, new
+            {
+                packageId = $"pkg_{package.Id:N}",
+                eventDate = DateTime.UtcNow.Date.AddDays(30),
+                guestCount = 120,
+                eventName = "Sita's wedding"
+            });
+            var bookingId = created.Body.GetProperty("id").GetString()!;
+            await PayAsync(customer, bookingId, payInFull: false);
+
+            // The vendor sees it as paid and waiting for their confirmation, in the apps' names.
+            var list = await SendAsync(HttpMethod.Get, "/api/v1/bookings/vendor", vendorToken);
+            Assert.Equal(HttpStatusCode.OK, list.Status);
+            var item = list.Body.GetProperty("items").EnumerateArray().Single(b => b.GetProperty("id").GetString() == bookingId);
+            Assert.Equal("advance_paid", item.GetProperty("status").GetString());
+
+            // Starting before confirming is refused with a reason.
+            var early = await SendAsync(HttpMethod.Patch, $"/api/v1/bookings/{bookingId}/status", vendorToken, new { status = "in_progress" });
+            Assert.Equal(HttpStatusCode.BadRequest, early.Status);
+
+            foreach (var (sent, expected) in new[] { ("confirmed", "confirmed"), ("in_progress", "in_progress"), ("completed", "completed") })
+            {
+                var moved = await SendAsync(HttpMethod.Patch, $"/api/v1/bookings/{bookingId}/status", vendorToken, new { status = sent });
+                Assert.Equal(HttpStatusCode.OK, moved.Status);
+                var seen = await SendAsync(HttpMethod.Get, $"/api/v1/bookings/{bookingId}", customer);
+                Assert.Equal(expected, seen.Body.GetProperty("status").GetString());
+            }
+
+            // Money states stay with the payment flow.
+            var forged = await SendAsync(HttpMethod.Patch, $"/api/v1/bookings/{bookingId}/status", vendorToken, new { status = "advance_paid" });
+            Assert.Equal(HttpStatusCode.BadRequest, forged.Status);
+
+            // Both sides were told.
+            using var scope = _factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<EventEaseDbContext>();
+            var customerId = (await db.Bookings.FindAsync(Guid.Parse(bookingId)))!.UserId;
+            var vendorUserId = (await db.Vendors.FindAsync(package.VendorId))!.UserId;
+            Assert.Contains(db.Notifications.Where(n => n.UserId == vendorUserId), n => n.Title == "New booking paid");
+            var customerTitles = db.Notifications.Where(n => n.UserId == customerId).Select(n => n.Title).ToList();
+            Assert.Contains("Booking confirmed", customerTitles);
+            Assert.Contains("Event completed", customerTitles);
+        }
+
+        [Fact]
+        public async Task Vendor_CannotMoveAnotherVendorsBooking()
+        {
+            var (_, package) = await RegisterVendorWithPackageAsync(maxGuests: 300);
+            var (otherVendor, _) = await RegisterVendorWithPackageAsync(maxGuests: 100);
+            var customer = await RegisterCustomerAsync();
+
+            var created = await SendAsync(HttpMethod.Post, "/api/v1/booking", customer, new
+            {
+                packageId = package.Id.ToString(),
+                eventDate = DateTime.UtcNow.Date.AddDays(33),
+                guestCount = 50
+            });
+            var bookingId = created.Body.GetProperty("id").GetString()!;
+            await PayAsync(customer, bookingId, payInFull: false);
+
+            var moved = await SendAsync(HttpMethod.Patch, $"/api/v1/bookings/{bookingId}/status", otherVendor, new { status = "confirmed" });
+            Assert.Equal(HttpStatusCode.Forbidden, moved.Status);
+        }
+
         // ---- helpers ----------------------------------------------------------------------
+
+        /// <summary>A vendor who can sign in, with one bookable package.</summary>
+        private async Task<(string Token, Package Package)> RegisterVendorWithPackageAsync(int maxGuests)
+        {
+            var (userId, token) = await CreateUserAsync(AuthRoles.Vendor);
+
+            using var scope = _factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<EventEaseDbContext>();
+            var vendor = new Vendor { Id = Guid.NewGuid(), UserId = userId };
+            db.Vendors.Add(vendor);
+            vendor.BusinessName = "Vendor Co";
+            vendor.Description = "Events";
+            vendor.IsValidated = true;
+
+            var package = new Package
+            {
+                Id = Guid.NewGuid(),
+                VendorId = vendor.Id,
+                Category = "wedding",
+                Name = "Garden Wedding",
+                Description = Description,
+                IsActive = true,
+                IsVerified = true,
+                Capacity = new PackageCapacity { MaxGuests = maxGuests },
+                Address = new PackageAddress { Street = "Lake Road", Locality = "Kokapet", City = "Hyderabad" }
+            };
+            db.Packages.Add(package);
+            await db.SaveChangesAsync();
+            return (token, package);
+        }
 
         private async Task<(decimal Amount, string Status)> PayAsync(string token, string bookingId, bool payInFull)
         {
@@ -212,19 +313,29 @@ namespace EventEase.Tests
             return package;
         }
 
-        private async Task<string> RegisterCustomerAsync()
+        /// <summary>
+        /// A signed-in customer. Created directly rather than through /auth/register, whose rate
+        /// limit a test class with many accounts would trip; the token comes from the app's own
+        /// token service, so it is the same kind of token a real sign-in issues.
+        /// </summary>
+        private Task<string> RegisterCustomerAsync() => CreateUserAsync(AuthRoles.User).ContinueWith(t => t.Result.Token);
+
+        private async Task<(Guid Id, string Token)> CreateUserAsync(string role)
         {
-            var res = await _client.PostAsJsonAsync("/api/v1/auth/register", new
+            using var scope = _factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<EventEaseDbContext>();
+            var user = new User
             {
-                name = "Customer",
-                email = $"customer_{Guid.NewGuid():N}@test.com",
-                password = "Password123!",
-                phone = "9999999999",
-                role = "User"
-            });
-            res.EnsureSuccessStatusCode();
-            var body = await res.Content.ReadFromJsonAsync<JsonElement>();
-            return body.GetProperty("token").GetString()!;
+                Id = Guid.NewGuid(),
+                Email = $"{role.ToLowerInvariant()}_{Guid.NewGuid():N}@test.com",
+                Name = role == AuthRoles.Vendor ? "Vendor" : "Customer",
+                Role = role,
+                Phone = "9999999999"
+            };
+            db.Users.Add(user);
+            await db.SaveChangesAsync();
+            var token = scope.ServiceProvider.GetRequiredService<ITokenService>().CreateAccessToken(user.Id, role);
+            return (user.Id, token);
         }
 
         private async Task<(HttpStatusCode Status, JsonElement Body)> SendAsync(

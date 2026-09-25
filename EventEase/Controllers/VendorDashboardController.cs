@@ -108,7 +108,13 @@ namespace EventEase.Api.Controllers
                 .Take(5)
                 .ToList();
 
-            var customerIds = upcoming.Select(b => b.UserId).Distinct().ToList();
+            // Paid bookings waiting for the vendor to confirm them, soonest event first.
+            var toConfirm = bookings
+                .Where(b => string.Equals(b.Status, BookingStatuses.Paid, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(b => b.EventDate)
+                .ToList();
+
+            var customerIds = upcoming.Concat(toConfirm).Select(b => b.UserId).Distinct().ToList();
             var customerNames = await _db.Users
                 .Where(u => customerIds.Contains(u.Id))
                 .ToDictionaryAsync(u => u.Id, u => u.Name);
@@ -117,6 +123,15 @@ namespace EventEase.Api.Controllers
             {
                 totalBookings = bookings.Count,
                 pendingRequests,
+                toConfirmCount = toConfirm.Count,
+                recentRequests = toConfirm.Take(5).Select(b => new
+                {
+                    id = b.Id,
+                    eventName = b.EventName,
+                    eventDate = b.EventDate.ToString("yyyy-MM-dd"),
+                    amount = b.TotalAmount,
+                    customerName = customerNames.TryGetValue(b.UserId, out var requester) ? requester : ""
+                }),
                 monthlyRevenue,
                 rating = reviews.Count > 0 ? Math.Round(reviews.Average(r => r.Rating), 1) : 0d,
                 totalReviews = reviews.Count,
@@ -208,6 +223,7 @@ namespace EventEase.Api.Controllers
             var bookingCountByStatus = new Dictionary<string, int>
             {
                 { "pending", 0 },
+                { "toConfirm", 0 },
                 { "accepted", 0 },
                 { "declined", 0 },
                 { "completed", 0 }
@@ -217,7 +233,8 @@ namespace EventEase.Api.Controllers
             {
                 var status = b.Status.ToLower();
                 if (status == "pending") bookingCountByStatus["pending"]++;
-                else if (status == "confirmed" || status == "paid") bookingCountByStatus["accepted"]++;
+                else if (status == "paid") bookingCountByStatus["toConfirm"]++;
+                else if (status == "confirmed" || status == "inprogress") bookingCountByStatus["accepted"]++;
                 else if (status == "cancelled" || status == "rejected") bookingCountByStatus["declined"]++;
                 else if (status == "completed" || status == "settled") bookingCountByStatus["completed"]++;
             }
