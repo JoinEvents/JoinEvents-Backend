@@ -3,6 +3,7 @@ using EventEase.Infrastructure.Data;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace EventEase.Tests
@@ -66,8 +67,11 @@ namespace EventEase.Tests
                     services.Remove(descriptor);
                 }
 
+                // The in-memory store has no transactions; the booking endpoints open one, so the
+                // warning it raises is ignored rather than thrown.
                 services.AddDbContext<EventEaseDbContext>(options =>
-                    options.UseInMemoryDatabase(_databaseName));
+                    options.UseInMemoryDatabase(_databaseName)
+                        .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning)));
             });
         }
     }

@@ -41,11 +41,13 @@ namespace EventEase.Api.Controllers
         /// <summary>
         /// Request to create a booking. Deliberately carries no monetary fields — every amount is
         /// computed server-side from the vendor's catalogue, and the owner is taken from the token.
+        /// Ids may be sent as plain GUIDs or in the prefixed form the catalogue returns (pkg_…, usr_…);
+        /// the vendor is taken from the package when one is booked.
         /// </summary>
         public record CreateBookingRequest(
-            Guid VendorId,
+            string? VendorId,
             DateTime EventDate,
-            Guid? PackageId,
+            string? PackageId,
             List<Guid>? ServiceIds,
             string? MealPreference,
             string? EventName,
@@ -54,30 +56,91 @@ namespace EventEase.Api.Controllers
             int GuestCount,
             Guid? RfpId);
 
-        [Authorize(Policy = AuthPolicies.User)]
-        [HttpPost]
-        public async Task<IActionResult> Create([FromBody] CreateBookingRequest req)
-        {
-            if (req is null) return BadRequest(new { error = "A booking request is required." });
-            if (req.VendorId == Guid.Empty) return BadRequest(new { error = "A vendor must be selected." });
-            if (req.EventDate.Date < DateTime.UtcNow.Date)
-                return BadRequest(new { error = "The event date cannot be in the past." });
+        /// <summary>What the customer is pricing before they book.</summary>
+        public record QuoteRequest(string? PackageId, int GuestCount, string? MealPreference, List<Guid>? ServiceIds);
 
-            var userId = GetUserId();
-            if (userId == Guid.Empty) return Unauthorized(new { error = "Invalid token." });
+        /// <summary>
+        /// Prices a package for a guest count exactly as a booking would be charged, so customers
+        /// see the real total, GST and advance before they commit.
+        /// </summary>
+        [HttpPost("quote")]
+        public async Task<IActionResult> Quote([FromBody] QuoteRequest req)
+        {
+            if (req is null) return BadRequest(new { error = "A package is required." });
+
+            var package = await FindPackageAsync(req.PackageId);
+            if (package is null) return BadRequest(new { error = "The selected package does not exist." });
 
             BookingPriceResult price;
             try
             {
                 price = await _pricing.PriceAsync(new BookingPriceRequest(
-                    req.VendorId, req.PackageId, req.GuestCount, req.ServiceIds, req.MealPreference));
+                    package.VendorId, package.Id, req.GuestCount, req.ServiceIds, req.MealPreference));
             }
             catch (BusinessRuleException ex)
             {
                 return BadRequest(new { error = ex.Message });
             }
 
-            var isAvailable = await _calendarService.CheckAvailabilityAsync(req.VendorId, req.EventDate);
+            return Ok(new
+            {
+                packageId = package.Id.ToString(),
+                packageName = price.PackageName,
+                vendorId = package.VendorId.ToString(),
+                guestCount = req.GuestCount,
+                maxGuests = price.MaxGuests,
+                lines = price.Lines.Select(l => new { description = l.Description, detail = l.Detail, amount = l.Amount }),
+                subtotal = price.Subtotal,
+                gstPercent = price.GstRate * 100,
+                gstAmount = price.GstAmount,
+                totalAmount = price.TotalAmount,
+                advancePercent = price.AdvanceRate * 100,
+                advanceAmount = price.AdvanceAmount,
+                balanceAmount = price.TotalAmount - price.AdvanceAmount
+            });
+        }
+
+        [Authorize(Policy = AuthPolicies.User)]
+        [HttpPost]
+        public async Task<IActionResult> Create([FromBody] CreateBookingRequest req)
+        {
+            if (req is null) return BadRequest(new { error = "A booking request is required." });
+            if (req.EventDate.Date < DateTime.UtcNow.Date)
+                return BadRequest(new { error = "The event date cannot be in the past." });
+
+            var userId = GetUserId();
+            if (userId == Guid.Empty) return Unauthorized(new { error = "Invalid token." });
+
+            Package? package = null;
+            if (!string.IsNullOrWhiteSpace(req.PackageId))
+            {
+                package = await FindPackageAsync(req.PackageId);
+                if (package is null) return BadRequest(new { error = "The selected package does not exist." });
+            }
+
+            // The vendor is the package's own; a vendor id is only needed for a booking of services alone.
+            var vendorId = package?.VendorId ?? ParseId(req.VendorId) ?? Guid.Empty;
+            if (vendorId == Guid.Empty) return BadRequest(new { error = "A vendor must be selected." });
+
+            var eventName = FirstNonBlank(req.EventName, package?.Name);
+            var city = FirstNonBlank(req.City, package?.Address?.City);
+            var venue = FirstNonBlank(req.Venue, PackageVenue(package));
+            if (eventName is null) return BadRequest(new { error = "Enter a name for the event." });
+            if (city is null) return BadRequest(new { error = "Enter the city of the event." });
+            if (venue is null) return BadRequest(new { error = "Enter the venue of the event." });
+
+            BookingPriceResult price;
+            try
+            {
+                price = await _pricing.PriceAsync(new BookingPriceRequest(
+                    vendorId, package?.Id, req.GuestCount, req.ServiceIds, req.MealPreference));
+            }
+            catch (BusinessRuleException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+
+            var isAvailable = await _calendarService.CheckAvailabilityAsync(vendorId, req.EventDate);
             if (!isAvailable)
             {
                 return BadRequest(new { error = "The vendor is already booked or has blocked the selected date." });
@@ -87,16 +150,16 @@ namespace EventEase.Api.Controllers
             {
                 Id = Guid.NewGuid(),
                 UserId = userId,
-                VendorId = req.VendorId,
+                VendorId = vendorId,
                 RfpId = req.RfpId,
                 EventDate = req.EventDate,
                 Status = BookingStatuses.Pending,
                 GuestCount = req.GuestCount,
-                PackageId = req.PackageId,
+                PackageId = package?.Id,
                 PackageName = price.PackageName,
-                EventName = string.IsNullOrWhiteSpace(req.EventName) ? "Event Celebration" : req.EventName.Trim(),
-                Venue = string.IsNullOrWhiteSpace(req.Venue) ? "Hotel Banquet" : req.Venue.Trim(),
-                City = string.IsNullOrWhiteSpace(req.City) ? "Mumbai" : req.City.Trim(),
+                EventName = eventName,
+                Venue = venue,
+                City = city,
 
                 // [SECURITY] Server-computed amounts only.
                 Amount = price.AdvanceAmount,
@@ -134,7 +197,60 @@ namespace EventEase.Api.Controllers
                 return Conflict(new { error = "That date was just taken. Please choose another date." });
             }
 
-            return Ok(await MapBookingsToDtosAsync(new List<Booking> { booking }));
+            return Ok((await MapBookingsToDtosAsync(new List<Booking> { booking })).Single());
+        }
+
+        /// <summary>One booking, for its customer, its vendor or staff.</summary>
+        [HttpGet("/api/v1/bookings/{bookingId:guid}")]
+        public async Task<IActionResult> GetBooking(Guid bookingId)
+        {
+            var booking = await _db.Bookings.AsNoTracking().FirstOrDefaultAsync(b => b.Id == bookingId);
+            if (booking is null) return NotFound(new { error = "Booking not found." });
+            if (!await CanAccessBookingAsync(booking)) return Forbid();
+
+            return Ok((await MapBookingsToDtosAsync(new List<Booking> { booking })).Single());
+        }
+
+        /// <summary>What has been paid on a booking so far (summed in memory: there are only a few).</summary>
+        private async Task<decimal> SucceededTotalAsync(Guid bookingId, Guid? except = null)
+        {
+            var amounts = await _db.Payments
+                .Where(p => p.BookingId == bookingId && p.Status == "Succeeded" && (except == null || p.Id != except))
+                .Select(p => p.Amount)
+                .ToListAsync();
+            return amounts.Sum();
+        }
+
+        private async Task<Package?> FindPackageAsync(string? rawId)
+        {
+            var id = ParseId(rawId);
+            if (id is null) return null;
+            return await _db.Packages.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id.Value);
+        }
+
+        /// <summary>Accepts a plain GUID or the catalogue's prefixed form (pkg_…, usr_…, bk_…).</summary>
+        internal static Guid? ParseId(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            var value = raw.Trim();
+            var underscore = value.IndexOf('_');
+            if (underscore > 0 && underscore < value.Length - 1) value = value[(underscore + 1)..];
+            return Guid.TryParse(value, out var id) && id != Guid.Empty ? id : null;
+        }
+
+        private static string? FirstNonBlank(params string?[] values) =>
+            values.Select(v => v?.Trim()).FirstOrDefault(v => !string.IsNullOrEmpty(v));
+
+        /// <summary>The package's own address as a venue line, when the vendor gave one.</summary>
+        private static string? PackageVenue(Package? package)
+        {
+            var address = package?.Address;
+            if (address is null) return null;
+            var parts = new[] { address.Street, address.Locality, address.City }
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Select(p => p.Trim())
+                .ToList();
+            return parts.Count > 0 ? string.Join(", ", parts) : null;
         }
 
         /// <summary>
@@ -241,6 +357,29 @@ namespace EventEase.Api.Controllers
                 .GroupBy(l => l.BookingId)
                 .ToDictionary(g => g.Key, g => g.OrderByDescending(l => l.CreatedAt).First());
 
+            var packageIds = bookings.Where(b => b.PackageId.HasValue).Select(b => b.PackageId!.Value).Distinct().ToList();
+            var packageCategories = await _db.Packages
+                .AsNoTracking()
+                .Where(p => packageIds.Contains(p.Id))
+                .Select(p => new { p.Id, p.Category })
+                .ToDictionaryAsync(p => p.Id, p => p.Category);
+
+            // Summed in memory: a booking has only a handful of payments.
+            var paidByBooking = (await _db.Payments
+                    .AsNoTracking()
+                    .Where(p => bookingIds.Contains(p.BookingId) && p.Status == "Succeeded")
+                    .Select(p => new { p.BookingId, p.Amount })
+                    .ToListAsync())
+                .GroupBy(p => p.BookingId)
+                .ToDictionary(g => g.Key, g => g.Sum(p => p.Amount));
+
+            var createdByBooking = await _db.BookingLogs
+                .AsNoTracking()
+                .Where(l => bookingIds.Contains(l.BookingId))
+                .GroupBy(l => l.BookingId)
+                .Select(g => new { BookingId = g.Key, CreatedAt = g.Min(l => l.CreatedAt) })
+                .ToDictionaryAsync(g => g.BookingId, g => g.CreatedAt);
+
             var dbServicesList = await _db.BookingServices
                 .Where(bs => bookingIds.Contains(bs.BookingId))
                 .ToListAsync();
@@ -335,13 +474,11 @@ namespace EventEase.Api.Controllers
                     };
                 }
 
-                string eventTypeId = "wedding";
-                var nameLower = (b.EventName ?? "").ToLower();
-                if (nameLower.Contains("birthday")) eventTypeId = "birthday";
-                else if (nameLower.Contains("corporate")) eventTypeId = "corporate";
-                else if (nameLower.Contains("beauty")) eventTypeId = "beauty";
-                else if (nameLower.Contains("travel")) eventTypeId = "travel";
-                else if (nameLower.Contains("shopping")) eventTypeId = "shopping";
+                // The booked package's own category, rather than a guess from the event's name.
+                var eventTypeId = b.PackageId.HasValue && packageCategories.TryGetValue(b.PackageId.Value, out var category)
+                    ? category
+                    : "";
+                paidByBooking.TryGetValue(b.Id, out var amountPaid);
 
                 result.Add(new
                 {
@@ -374,6 +511,8 @@ namespace EventEase.Api.Controllers
                     gstPercent = 18,
                     totalAmount = b.TotalAmount,
                     finalPaidAmount = b.FinalPaidAmount,
+                    amountPaid = amountPaid,
+                    balanceDue = Math.Max(0, b.TotalAmount - amountPaid),
                     cancelledBy = b.CancelledBy,
                     cancellationReason = b.CancellationReason,
                     cancellationDate = b.CancellationDate?.ToString("yyyy-MM-dd"),
@@ -388,7 +527,7 @@ namespace EventEase.Api.Controllers
                     disputeInfo = disputeInfo,
                     review = reviewInfo,
                     services = services,
-                    createdAt = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm")
+                    createdAt = createdByBooking.TryGetValue(b.Id, out var createdAt) ? createdAt.ToString("yyyy-MM-dd HH:mm") : null
                 });
             }
 
@@ -599,29 +738,37 @@ namespace EventEase.Api.Controllers
                 return BadRequest(new { error = "This booking is already fully paid." });
             }
 
-            // Pending bookings pay the advance; anything further along pays the remaining balance.
-            decimal amountToPay = booking.Status.Equals(BookingStatuses.Pending, StringComparison.OrdinalIgnoreCase)
+            // A pending booking pays the advance, or the whole total when the customer chooses to;
+            // anything further along pays whatever is still outstanding.
+            var alreadyPaid = await SucceededTotalAsync(booking.Id);
+            var isPending = booking.Status.Equals(BookingStatuses.Pending, StringComparison.OrdinalIgnoreCase);
+            decimal amountToPay = isPending && !req.PayInFull
                 ? booking.AdvanceAmount
-                : booking.TotalAmount - booking.AdvanceAmount;
+                : booking.TotalAmount - alreadyPaid;
 
             if (amountToPay <= 0)
             {
                 return BadRequest(new { error = "This booking is already fully paid." });
             }
 
-            // Reuse an in-flight attempt instead of stacking up Initiated rows on repeated taps.
-            var existing = await _db.Payments
-                .FirstOrDefaultAsync(p => p.BookingId == booking.Id && p.Status == "Initiated");
-            if (existing is not null && existing.Amount == amountToPay)
+            // Reuse an in-flight attempt instead of stacking up Initiated rows on repeated taps. An
+            // attempt for a different amount (the customer switched between advance and full) is
+            // abandoned so it can no longer be confirmed.
+            var inFlight = await _db.Payments
+                .Where(p => p.BookingId == booking.Id && p.Status == "Initiated")
+                .ToListAsync();
+            var existing = inFlight.FirstOrDefault(p => p.Amount == amountToPay);
+            if (existing is not null)
             {
-                return Ok(new { paymentId = existing.Id, providerRef = existing.ProviderReference });
+                return Ok(new { paymentId = existing.Id, providerRef = existing.ProviderReference, amount = amountToPay });
             }
+            foreach (var stale in inFlight) stale.Status = "Cancelled";
 
             var (refId, _) = await _gateway.InitiateAsync(booking.Id, amountToPay, req.PaymentMethod);
             var payment = new Payment { Id = Guid.NewGuid(), BookingId = booking.Id, Amount = amountToPay, ProviderReference = refId };
             _db.Payments.Add(payment);
             await _db.SaveChangesAsync();
-            return Ok(new { paymentId = payment.Id, providerRef = refId });
+            return Ok(new { paymentId = payment.Id, providerRef = refId, amount = amountToPay });
         }
 
         [Authorize]
@@ -660,33 +807,43 @@ namespace EventEase.Api.Controllers
 
             if (ok)
             {
-                // A booking still Pending is receiving its advance; anything further along is
-                // receiving the balance, which settles it.
-                if (booking.Status.Equals(BookingStatuses.Pending, StringComparison.OrdinalIgnoreCase))
+                var paidBefore = await SucceededTotalAsync(booking.Id, except: payment.Id);
+                var fullyPaid = paidBefore + payment.Amount >= booking.TotalAmount;
+
+                // The first payment on a pending booking (the advance, or the whole total) moves it
+                // to Paid so the vendor can confirm it. Clearing the balance records the booking as
+                // fully paid; it is Settled only once the event itself is completed, so paying early
+                // never skips the vendor's confirmation or the event.
+                var wasPending = booking.Status.Equals(BookingStatuses.Pending, StringComparison.OrdinalIgnoreCase);
+                if (wasPending)
                 {
                     booking.Status = BookingStatuses.Paid;
-                    _db.BookingLogs.Add(new BookingLog
-                    {
-                        Id = Guid.NewGuid(),
-                        BookingId = booking.Id,
-                        Message = "Advance payment confirmed by the payment provider.",
-                        Actor = "System",
-                        CreatedAt = DateTime.UtcNow
-                    });
                 }
-                else
+                if (fullyPaid)
                 {
-                    booking.Status = BookingStatuses.Settled;
                     booking.FinalPaidAmount = booking.TotalAmount;
-                    _db.BookingLogs.Add(new BookingLog
+                    if (booking.Status.Equals(BookingStatuses.Completed, StringComparison.OrdinalIgnoreCase))
                     {
-                        Id = Guid.NewGuid(),
-                        BookingId = booking.Id,
-                        Message = "Balance payment confirmed by the payment provider; booking settled.",
-                        Actor = "System",
-                        CreatedAt = DateTime.UtcNow
-                    });
+                        booking.Status = BookingStatuses.Settled;
+                    }
                 }
+
+                _db.BookingLogs.Add(new BookingLog
+                {
+                    Id = Guid.NewGuid(),
+                    BookingId = booking.Id,
+                    Message = (wasPending, fullyPaid) switch
+                    {
+                        (true, true) => "Full payment confirmed by the payment provider.",
+                        (true, false) => "Advance payment confirmed by the payment provider.",
+                        (false, true) => booking.Status == BookingStatuses.Settled
+                            ? "Balance payment confirmed by the payment provider; booking settled."
+                            : "Balance payment confirmed by the payment provider; booking fully paid.",
+                        _ => "Payment confirmed by the payment provider."
+                    },
+                    Actor = "System",
+                    CreatedAt = DateTime.UtcNow
+                });
 
                 // Award points: 10 points for every 100 spent in this specific payment transaction.
                 int pointsEarned = (int)(payment.Amount / 100) * 10;
