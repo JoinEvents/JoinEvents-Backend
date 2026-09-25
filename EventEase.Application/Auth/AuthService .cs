@@ -111,6 +111,11 @@ namespace EventEase.Application.Auth
         }
 
         /// <summary>Blocks sign-in for suspended and banned accounts.</summary>
+        // Mobile keyboards auto-capitalize and autofill can pad with spaces, so the same address
+        // typed on the website and in the app must resolve to the same account. Existing rows are
+        // matched case-insensitively by the database collation; trimming covers stray whitespace.
+        private static string NormalizeEmail(string? email) => (email ?? string.Empty).Trim().ToLowerInvariant();
+
         private static bool IsLoginAllowed(User user)
         {
             var status = user.AccountStatus?.ToLowerInvariant();
@@ -173,7 +178,8 @@ namespace EventEase.Application.Auth
             // [SECURITY] Validate password strength
             ValidatePasswordStrength(dto.password);
 
-            var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == dto.email);
+            var email = NormalizeEmail(dto.email);
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == email);
             if (user != null)
             {
                 throw new InvalidOperationException("User with this email already exists");
@@ -206,7 +212,7 @@ namespace EventEase.Application.Auth
             {
                 Id = Guid.NewGuid(),
                 Name = dto.name,
-                Email = dto.email,
+                Email = email,
                 Phone = dto.phone,
                 Role = dto.role ?? "Customer",
                 PasswordHash = HashPassword(dto.password),
@@ -275,7 +281,8 @@ namespace EventEase.Application.Auth
 
         public async Task<AuthTokens?> LoginAsync(LoginDto dto)
         {
-            var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == dto.email);
+            var email = NormalizeEmail(dto.email);
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == email);
             if (user is null) return null;
 
             // [SECURITY] Reject users with no password hash — they must reset their password
