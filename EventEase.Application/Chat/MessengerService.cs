@@ -218,9 +218,20 @@ namespace EventEase.Application.Chat
             var vendor = await _db.Vendors.FindAsync(vendorId);
             var vendorUserId = vendor != null ? vendor.UserId : vendorId;
 
+            // Only a real quote request scopes a thread; the apps also pass a booking id here.
+            if (rfpId.HasValue && !await _db.Rfps.AnyAsync(r => r.Id == rfpId.Value)) rfpId = null;
+
             var now = DateTime.UtcNow;
-            var thread = await _db.ChatThreads.FirstOrDefaultAsync(t => 
+            var thread = await _db.ChatThreads.FirstOrDefaultAsync(t =>
                 t.CustomerId == customerId && t.VendorId == vendorUserId && t.RfpId == rfpId);
+
+            // An open conversation with this vendor (such as the one a confirmed booking opened)
+            // is reused rather than starting a new request the vendor must accept first.
+            thread ??= await _db.ChatThreads
+                .Where(t => t.CustomerId == customerId && t.VendorId == vendorUserId &&
+                            (t.Status == "Active" || t.Status == "Accepted"))
+                .OrderByDescending(t => t.UpdatedAt)
+                .FirstOrDefaultAsync();
 
             if (thread == null)
             {

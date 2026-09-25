@@ -133,6 +133,23 @@ namespace EventEase.Tests
         }
 
         [Fact]
+        public async Task ChatWithVendorAfterBooking_ReusesTheOpenConversation()
+        {
+            var (_, customer) = await CreateUserAsync(AuthRoles.User);
+            var (_, vendor, package) = await CreateVendorWithPackageAsync();
+            var bookingId = await BookAndPayAsync(customer, package.Id);
+            var confirmed = await SendAsync(HttpMethod.Patch, $"/api/v1/bookings/{bookingId}/status", vendor, new { status = "confirmed" });
+            var threadId = confirmed.Body.GetProperty("threadId").GetString()!;
+
+            // The apps' "chat with vendor" passes the booking id as rfpId.
+            var requested = await SendAsync(HttpMethod.Post, "/api/v1/messenger/request", customer,
+                new { vendorId = package.VendorId.ToString(), rfpId = bookingId, message = "About our booking" });
+            Assert.Equal(threadId, requested.Body.GetProperty("threadId").GetString());
+            var alive = await SendAsync(HttpMethod.Get, $"/api/v1/messenger/threads/{threadId}/alive", customer);
+            Assert.True(alive.Body.GetProperty("isAlive").GetBoolean());
+        }
+
+        [Fact]
         public async Task Notifications_CanBeMarkedReadOneByOneAndCleared()
         {
             var (_, customer) = await CreateUserAsync(AuthRoles.User);

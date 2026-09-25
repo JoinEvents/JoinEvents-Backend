@@ -290,7 +290,19 @@ namespace EventEase.Api.Controllers
 
             var customerId = GetUserId();
             var threadId = await _messenger.RequestChatAsync(customerId, vendor.Value, ParseId(rfpId), message);
-            return Ok(new { threadId, status = "Pending" });
+
+            // The vendor sees the opening message straight away.
+            if (!string.IsNullOrWhiteSpace(message))
+            {
+                var latest = (await _messenger.GetMessagesAsync(threadId)).LastOrDefault();
+                if (latest is not null)
+                {
+                    await _realtime.MessageAsync(await _messenger.ParticipantUserIdsAsync(threadId), latest);
+                }
+            }
+
+            var alive = await _messenger.IsChatSessionAliveAsync(threadId);
+            return Ok(new { threadId, status = alive ? "Open" : "Pending" });
         }
 
         [Authorize]
