@@ -71,17 +71,10 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_FE3A9091EB5C44FA86A5B02CEAD20FE7 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_0C31C7B1A18144DA86C68AE4DD6407A4 }}
 
-      # TEMPORARY: two guesses at app-name ('joinevents-api-chiru' and
-      # 'joinevents-api-chiru-gse0abhtd7gkbzaz') both failed with "Resource ...
-      # doesn't exist". List what this service principal can actually see so the
-      # next commit can use the real name instead of guessing a third time.
-      - name: List Azure Web Apps (diagnostic)
-        run: az webapp list --query "[].{name:name, host:defaultHostName, resourceGroup:resourceGroup}" -o table
-
       - name: Deploy to Azure Web App
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
         with:
-          app-name: 'joinevents-api-chiru-gse0abhtd7gkbzaz'
+          app-name: 'JoinEvents-Backend'
           slot-name: 'Production'
           package: .
