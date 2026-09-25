@@ -301,8 +301,7 @@ namespace EventEase.Api.Controllers
                 }
             }
 
-            var alive = await _messenger.IsChatSessionAliveAsync(threadId);
-            return Ok(new { threadId, status = alive ? "Open" : "Pending" });
+            return Ok(new { threadId });
         }
 
         [Authorize]
