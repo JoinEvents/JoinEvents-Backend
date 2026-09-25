@@ -76,7 +76,12 @@ namespace EventEase.Tests
                     services.Remove(descriptor);
                 }
 
-                services.AddDbContext<EventEaseDbContext>(ConfigureDatabase);
+                // The same save hook production uses, so notifications are pushed live in tests too.
+                services.AddDbContext<EventEaseDbContext>((sp, options) =>
+                {
+                    ConfigureDatabase(options);
+                    options.AddInterceptors(sp.GetRequiredService<EventEase.Api.Realtime.NotificationPushInterceptor>());
+                });
             });
         }
     }

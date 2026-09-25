@@ -33,9 +33,16 @@ namespace EventEase.Application.Services
             }
 
             await _db.SaveChangesAsync();
+            return list.Count;
+        }
 
-            // Fallback count to match blueprint "markedCount: 3" if DB is empty
-            return list.Count == 0 ? 3 : list.Count;
+        public async Task<bool> MarkAsReadAsync(Guid id, Guid userId)
+        {
+            var notification = await _db.Notifications.FirstOrDefaultAsync(n => n.Id == id && n.UserId == userId);
+            if (notification is null) return false;
+            notification.IsRead = true;
+            await _db.SaveChangesAsync();
+            return true;
         }
 
         public async Task<bool> DeleteNotificationAsync(Guid id, Guid userId)

@@ -23,6 +23,7 @@ namespace EventEase.Api.Controllers
         private readonly IMessengerService _messenger;
         private readonly INotificationService _notifications;
         private readonly IHubContext<ChatHub> _hubContext;
+        private readonly EventEase.Api.Realtime.IRealtimeNotifier _realtime;
         private readonly IFileStorage _fileStorage;
 
         public EnterprisePortalsController(
@@ -31,9 +32,11 @@ namespace EventEase.Api.Controllers
             IMessengerService messenger,
             INotificationService notifications,
             IHubContext<ChatHub> hubContext,
-            IFileStorage fileStorage)
+            IFileStorage fileStorage,
+            EventEase.Api.Realtime.IRealtimeNotifier realtime)
         {
             _fileStorage = fileStorage;
+            _realtime = realtime;
             _portals = portals;
             _documents = documents;
             _messenger = messenger;
@@ -242,6 +245,7 @@ namespace EventEase.Api.Controllers
         [HttpGet("/api/v1/messenger/threads/{threadId:guid}/alive")]
         public async Task<IActionResult> IsThreadAlive(Guid threadId)
         {
+            if (!await _messenger.IsParticipantAsync(threadId, GetUserId())) return Forbid();
             var isAlive = await _messenger.IsChatSessionAliveAsync(threadId);
             return Ok(new { isAlive });
         }
@@ -250,16 +254,42 @@ namespace EventEase.Api.Controllers
         [HttpGet("/api/v1/messenger/threads/{threadId:guid}/messages")]
         public async Task<IActionResult> GetMessages(Guid threadId)
         {
+            // [SECURITY] Only the two parties may read a conversation; this returned any thread's
+            // history to any signed-in user.
+            if (!await _messenger.IsParticipantAsync(threadId, GetUserId())) return Forbid();
             var res = await _messenger.GetMessagesAsync(threadId);
             return Ok(res);
         }
 
+        /// <summary>What a customer sends to start a conversation with a vendor.</summary>
+        public record RequestChatBody(string? VendorId, string? RfpId, string? Message);
+
         [Authorize]
         [HttpPost("/api/v1/messenger/request")]
-        public async Task<IActionResult> RequestChat([FromQuery] Guid vendorId, [FromQuery] Guid? rfpId, [FromBody] string? message)
+        public async Task<IActionResult> RequestChat(
+            [FromQuery] string? vendorId, [FromQuery] string? rfpId,
+            [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] System.Text.Json.JsonElement? body)
         {
+            // The apps send { vendorId, rfpId, message } in the body; older callers put the ids in
+            // the query and the message as a bare JSON string. Both are accepted.
+            string? message = null;
+            if (body?.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                message = body.Value.GetString();
+            }
+            else if (body?.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                var parsed = System.Text.Json.JsonSerializer.Deserialize<RequestChatBody>(body.Value.GetRawText(), new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                vendorId ??= parsed?.VendorId;
+                rfpId ??= parsed?.RfpId;
+                message = parsed?.Message;
+            }
+
+            var vendor = ParseId(vendorId);
+            if (vendor is null) return BadRequest(new { error = "A vendor must be selected." });
+
             var customerId = GetUserId();
-            var threadId = await _messenger.RequestChatAsync(customerId, vendorId, rfpId, message);
+            var threadId = await _messenger.RequestChatAsync(customerId, vendor.Value, ParseId(rfpId), message);
             return Ok(new { threadId, status = "Pending" });
         }
 
@@ -267,7 +297,7 @@ namespace EventEase.Api.Controllers
         [HttpPost("/api/v1/messenger/threads/{threadId:guid}/accept")]
         public async Task<IActionResult> AcceptChat(Guid threadId)
         {
-            var ok = await _messenger.AcceptChatAsync(threadId);
+            var ok = await _messenger.AcceptChatAsync(threadId, GetUserId());
             return ok ? Ok(new { success = true }) : NotFound();
         }
 
@@ -275,7 +305,7 @@ namespace EventEase.Api.Controllers
         [HttpPost("/api/v1/messenger/threads/{threadId:guid}/reject")]
         public async Task<IActionResult> RejectChat(Guid threadId)
         {
-            var ok = await _messenger.RejectChatAsync(threadId);
+            var ok = await _messenger.RejectChatAsync(threadId, GetUserId());
             return ok ? Ok(new { success = true }) : NotFound();
         }
 
@@ -288,17 +318,23 @@ namespace EventEase.Api.Controllers
             return ok ? Ok(new { success = true }) : NotFound();
         }
 
+        /// <summary>The message body. Content is the API's name; the mobile app sent "body".</summary>
+        public record SendMessageBody(string? Content, string? Body);
+
         [Authorize]
         [HttpPost("/api/v1/messenger/threads/{threadId:guid}/messages")]
-        public async Task<IActionResult> SendMessage(Guid threadId, [FromBody] SendMessageRequest dto)
+        public async Task<IActionResult> SendMessage(Guid threadId, [FromBody] SendMessageBody dto)
         {
+            var content = (dto?.Content ?? dto?.Body)?.Trim();
+            if (string.IsNullOrEmpty(content)) return BadRequest(new { error = "Write a message first." });
+
             var userId = GetUserId();
-            var res = await _messenger.SendMessageAsync(threadId, userId, dto);
+            var res = await _messenger.SendMessageAsync(threadId, userId, new SendMessageRequest(content));
             if (res == null)
             {
                 return BadRequest(new { error = "Chat session is closed, rejected, or thread not found." });
             }
-            await _hubContext.Clients.Group(threadId.ToString()).SendAsync("ReceiveMessage", res);
+            await _realtime.MessageAsync(await _messenger.ParticipantUserIdsAsync(threadId), res);
             return StatusCode(201, res);
         }
 
@@ -323,6 +359,18 @@ namespace EventEase.Api.Controllers
         }
 
         [Authorize]
+        [HttpPatch("/api/v1/notifications/{id}/read")]
+        [HttpPost("/api/v1/notifications/{id}/read")]
+        public async Task<IActionResult> MarkNotificationRead(string id)
+        {
+            var cleanId = id.StartsWith("notif_") ? id[6..] : id;
+            if (!Guid.TryParse(cleanId, out var guid)) return NotFound(new { error = "Notification not found" });
+            var ok = await _notifications.MarkAsReadAsync(guid, GetUserId());
+            return ok ? Ok(new { success = true }) : NotFound(new { error = "Notification not found" });
+        }
+
+        [Authorize]
+        [HttpPost("/api/v1/notifications/read-all")]
         [HttpPut("/api/v1/notifications/read-all")]
         public async Task<IActionResult> MarkNotificationsRead()
         {
@@ -353,6 +401,7 @@ namespace EventEase.Api.Controllers
         }
 
         [Authorize]
+        [HttpDelete("/api/v1/notifications")]
         [HttpDelete("/api/v1/notifications/clear-all")]
         public async Task<IActionResult> ClearAllNotifications()
         {
@@ -362,6 +411,16 @@ namespace EventEase.Api.Controllers
         }
 
         // --- HELPERS ---
+
+        /// <summary>A plain GUID or the catalogue's prefixed form (usr_…, rfp_…, pkg_…).</summary>
+        private static Guid? ParseId(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            var value = raw.Trim();
+            var underscore = value.IndexOf('_');
+            if (underscore > 0 && underscore < value.Length - 1) value = value[(underscore + 1)..];
+            return Guid.TryParse(value, out var id) && id != Guid.Empty ? id : null;
+        }
 
         private Guid GetUserId()
         {

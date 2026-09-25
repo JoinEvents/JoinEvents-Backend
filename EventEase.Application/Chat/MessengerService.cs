@@ -33,8 +33,10 @@ namespace EventEase.Application.Chat
             var rfpIds = threads.Where(t => t.RfpId.HasValue).Select(t => t.RfpId!.Value).Distinct().ToList();
             var rfps = await _db.Rfps.Where(r => rfpIds.Contains(r.Id)).ToDictionaryAsync(r => r.Id, r => r);
 
+            // Bookings are keyed by the Vendor profile id while threads hold the vendor's user id,
+            // so both are matched (matching on the user id alone never found a booking).
             var customerIds = threads.Select(t => t.CustomerId).ToList();
-            var vendorIds = threads.Select(t => t.VendorId).ToList();
+            var vendorIds = threads.Select(t => t.VendorId).Concat(vendorsList.Select(v => v.Id)).Distinct().ToList();
             var bookings = await _db.Bookings
                 .Where(b => customerIds.Contains(b.UserId) && vendorIds.Contains(b.VendorId))
                 .OrderByDescending(b => b.EventDate)
@@ -88,9 +90,9 @@ namespace EventEase.Application.Chat
 
                 if (string.IsNullOrEmpty(eventTitle))
                 {
-                    var booking = t.RfpId.HasValue
-                        ? bookings.FirstOrDefault(b => b.Id == t.RfpId.Value)
-                        : bookings.FirstOrDefault(b => b.UserId == t.CustomerId && b.VendorId == t.VendorId);
+                    var profileId = vendorsDict.GetValueOrDefault(t.VendorId)?.Id;
+                    var booking = (t.RfpId.HasValue ? bookings.FirstOrDefault(b => b.RfpId == t.RfpId) : null)
+                        ?? bookings.FirstOrDefault(b => b.UserId == t.CustomerId && (b.VendorId == t.VendorId || b.VendorId == profileId));
                     if (booking != null)
                     {
                         eventTitle = !string.IsNullOrEmpty(booking.EventName)
@@ -141,23 +143,13 @@ namespace EventEase.Application.Chat
             // any authenticated user could write into any thread by id.
             if (!await IsParticipantAsync(threadId, senderId)) return null;
 
+            // A booked conversation stays open. This used to close a quote-request thread as soon
+            // as its booking was paid, cutting customer and vendor off right when they need to talk.
             if (thread.Status == "Rejected" || thread.Status == "Closed")
             {
                 return null;
             }
-
-            if (thread.RfpId.HasValue)
-            {
-                var isBookingComplete = await _db.Bookings
-                    .AnyAsync(b => b.RfpId == thread.RfpId && (b.Status == "Paid" || b.Status == "Completed"));
-                if (isBookingComplete)
-                {
-                    thread.Status = "Closed";
-                    thread.UpdatedAt = DateTime.UtcNow;
-                    await _db.SaveChangesAsync();
-                    return null;
-                }
-            }
+            if (string.IsNullOrWhiteSpace(dto.Content)) return null;
 
             var now = DateTime.UtcNow;
             var msg = new Core.Entities.ChatMessage
@@ -165,12 +157,12 @@ namespace EventEase.Application.Chat
                 Id = Guid.NewGuid(),
                 ThreadId = threadId,
                 SenderId = senderId,
-                Content = dto.Content,
+                Content = dto.Content.Trim(),
                 Timestamp = now
             };
             _db.ChatMessages.Add(msg);
 
-            thread.LastMessage = dto.Content;
+            thread.LastMessage = msg.Content;
             thread.UpdatedAt = now;
             thread.UnreadCount += 1;
 
@@ -189,19 +181,11 @@ namespace EventEase.Application.Chat
             );
         }
 
+        /// <summary>A conversation is open until it is declined or closed; a booking never closes it.</summary>
         public async Task<bool> IsChatSessionAliveAsync(Guid threadId)
         {
-            var thread = await _db.ChatThreads.FindAsync(threadId);
-            if (thread == null) return false;
-
-            if (thread.Status == "Rejected" || thread.Status == "Closed") return false;
-
-            if (!thread.RfpId.HasValue) return thread.Status != "Rejected" && thread.Status != "Closed";
-
-            var isBookingComplete = await _db.Bookings
-                .AnyAsync(b => b.RfpId == thread.RfpId && (b.Status == BookingStatus.Paid.ToString() || b.Status == BookingStatus.Completed.ToString()));
-
-            return !isBookingComplete && (thread.Status == ChatThreadStatus.Accepted.ToString() || thread.Status == ChatThreadStatus.Active.ToString() || thread.Status == ChatThreadStatus.Pending.ToString());
+            var thread = await _db.ChatThreads.AsNoTracking().FirstOrDefaultAsync(t => t.Id == threadId);
+            return thread is not null && thread.Status != "Rejected" && thread.Status != "Closed";
         }
 
         public async Task<List<MessageResponse>> GetMessagesAsync(Guid threadId)
@@ -281,32 +265,109 @@ namespace EventEase.Application.Chat
             return thread.Id;
         }
 
-        public async Task<bool> AcceptChatAsync(Guid threadId)
+        public Task<bool> AcceptChatAsync(Guid threadId, Guid vendorUserId) =>
+            SetStatusAsVendorAsync(threadId, vendorUserId, ChatThreadStatus.Accepted.ToString());
+
+        public Task<bool> RejectChatAsync(Guid threadId, Guid vendorUserId) =>
+            SetStatusAsVendorAsync(threadId, vendorUserId, ChatThreadStatus.Rejected.ToString());
+
+        /// <summary>
+        /// [SECURITY] Only the vendor on the thread answers a chat request. Any signed-in user
+        /// could previously accept or reject any conversation by id.
+        /// </summary>
+        private async Task<bool> SetStatusAsVendorAsync(Guid threadId, Guid vendorUserId, string status)
         {
             var thread = await _db.ChatThreads.FindAsync(threadId);
-            if (thread == null) return false;
+            if (thread is null || !await IsVendorOfAsync(thread, vendorUserId)) return false;
 
-            thread.Status = "Accepted";
+            thread.Status = status;
             thread.UpdatedAt = DateTime.UtcNow;
             await _db.SaveChangesAsync();
             return true;
         }
 
-        public async Task<bool> RejectChatAsync(Guid threadId)
+        private async Task<bool> IsVendorOfAsync(ChatThread thread, Guid userId)
         {
-            var thread = await _db.ChatThreads.FindAsync(threadId);
-            if (thread == null) return false;
+            if (userId == Guid.Empty) return false;
+            if (thread.VendorId == userId) return true;
+            var vendor = await _db.Vendors.AsNoTracking().FirstOrDefaultAsync(v => v.UserId == userId);
+            return vendor is not null && thread.VendorId == vendor.Id;
+        }
 
-            thread.Status = "Rejected";
-            thread.UpdatedAt = DateTime.UtcNow;
+        public async Task<MessageResponse> OpenBookingThreadAsync(Guid customerId, Guid vendorUserId, Guid? rfpId, string note)
+        {
+            var now = DateTime.UtcNow;
+
+            // One conversation per customer and vendor: the quote-request thread when the booking
+            // came from one, otherwise their most recent thread.
+            var candidates = _db.ChatThreads.Where(t => t.CustomerId == customerId && t.VendorId == vendorUserId);
+            var thread = (rfpId.HasValue ? await candidates.FirstOrDefaultAsync(t => t.RfpId == rfpId) : null)
+                         ?? await candidates.OrderByDescending(t => t.UpdatedAt).FirstOrDefaultAsync();
+
+            if (thread is null)
+            {
+                thread = new ChatThread
+                {
+                    Id = Guid.NewGuid(),
+                    CustomerId = customerId,
+                    VendorId = vendorUserId,
+                    RfpId = rfpId,
+                    UpdatedAt = now
+                };
+                _db.ChatThreads.Add(thread);
+            }
+
+            // A confirmed booking opens the conversation, whatever state an earlier request was in.
+            thread.Status = ChatThreadStatus.Active.ToString();
+            thread.LastMessage = note;
+            thread.UpdatedAt = now;
+            thread.UnreadCount += 1;
+
+            var message = new Core.Entities.ChatMessage
+            {
+                Id = Guid.NewGuid(),
+                ThreadId = thread.Id,
+                SenderId = vendorUserId,
+                Content = note,
+                Timestamp = now
+            };
+            _db.ChatMessages.Add(message);
             await _db.SaveChangesAsync();
-            return true;
+
+            var sender = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == vendorUserId);
+            var vendorName = await _db.Vendors.AsNoTracking()
+                .Where(v => v.UserId == vendorUserId)
+                .Select(v => v.BusinessName)
+                .FirstOrDefaultAsync();
+
+            return new MessageResponse(
+                message.Id.ToString(),
+                thread.Id.ToString(),
+                vendorUserId.ToString(),
+                !string.IsNullOrWhiteSpace(vendorName) ? vendorName : sender?.Name ?? "",
+                sender?.Avatar,
+                message.Content,
+                now);
+        }
+
+        public async Task<IReadOnlyList<Guid>> ParticipantUserIdsAsync(Guid threadId)
+        {
+            var thread = await _db.ChatThreads.AsNoTracking().FirstOrDefaultAsync(t => t.Id == threadId);
+            if (thread is null) return Array.Empty<Guid>();
+
+            // Legacy rows may hold the Vendor profile id rather than the vendor's user id.
+            var vendorUserId = await _db.Vendors.AsNoTracking()
+                .Where(v => v.Id == thread.VendorId)
+                .Select(v => (Guid?)v.UserId)
+                .FirstOrDefaultAsync() ?? thread.VendorId;
+
+            return new[] { thread.CustomerId, vendorUserId };
         }
 
         public async Task<bool> MarkAsReadAsync(Guid threadId, Guid userId)
         {
             var thread = await _db.ChatThreads.FindAsync(threadId);
-            if (thread == null) return false;
+            if (thread == null || !await IsParticipantAsync(threadId, userId)) return false;
 
             thread.UnreadCount = 0;
             await _db.SaveChangesAsync();
