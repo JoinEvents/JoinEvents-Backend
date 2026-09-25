@@ -196,30 +196,10 @@ namespace EventEase.Api.Controllers
         [HttpPost("/api/v1/profile/avatar")]
         public async Task<IActionResult> UploadAvatar(IFormFile file)
         {
-            if (file == null || file.Length == 0)
+            var validationError = await ImageUploadValidator.ValidateAsync(file, MaxAvatarBytes);
+            if (validationError is not null)
             {
-                return BadRequest(new { error = "No image file provided." });
-            }
-            if (file.Length > MaxAvatarBytes)
-            {
-                return BadRequest(new { error = "File size exceeds the 5MB limit." });
-            }
-
-            var ext = Path.GetExtension(file.FileName)?.ToLowerInvariant();
-            if (string.IsNullOrEmpty(ext) || !AllowedAvatarExtensions.Contains(ext))
-            {
-                return BadRequest(new { error = "Invalid file type. Only JPG, PNG, WebP, and GIF are allowed." });
-            }
-            if (!AllowedAvatarMimeTypes.Contains(file.ContentType?.ToLowerInvariant()))
-            {
-                return BadRequest(new { error = "Invalid file content type." });
-            }
-
-            // [SECURITY] The extension and declared content type are both attacker-controlled, so
-            // the bytes themselves are checked before the file is stored and served back.
-            if (!await HasImageMagicBytesAsync(file))
-            {
-                return BadRequest(new { error = "The uploaded file is not a valid image." });
+                return BadRequest(new { error = validationError });
             }
 
             try
@@ -230,8 +210,32 @@ namespace EventEase.Api.Controllers
                 // Stored in object storage rather than the container's local disk: instances are
                 // ephemeral and do not share a filesystem, so local uploads were lost on restart
                 // and invisible to other instances.
-                var avatarUrl = await _blobs.UploadAsync(file, userId.ToString());
+                var blobName = await _blobs.UploadAsync(file, userId.ToString());
+
+                // The URL rather than the blob name: Avatar is read back in a dozen places
+                // (reviews, chat, support queues) that hand it straight to an <img>. That only
+                // holds while the media container serves anonymous reads, which is why
+                // AzureStorage:MediaPublicAccess defaults to true.
+                var avatarUrl = await _blobs.GetUrlAsync(blobName);
+
+                // The previous avatar is now unreferenced; drop it rather than pay to keep every
+                // picture the user has ever set.
+                var previous = await _auth.GetAvatarAsync(userId);
+
                 await _auth.UpdateAvatarAsync(userId, avatarUrl);
+
+                var previousBlob = _blobs.TryResolveBlobName(previous);
+                if (previousBlob is not null && previousBlob != blobName)
+                {
+                    try
+                    {
+                        await _blobs.DeleteAsync(previousBlob);
+                    }
+                    catch (Exception ex)
+                    {
+                        Serilog.Log.Warning(ex, "Could not delete replaced avatar blob {Blob}", previousBlob);
+                    }
+                }
 
                 return Ok(new { avatarUrl });
             }
@@ -243,38 +247,6 @@ namespace EventEase.Api.Controllers
         }
 
         private const long MaxAvatarBytes = 5 * 1024 * 1024;
-
-        private static readonly string[] AllowedAvatarExtensions = { ".jpg", ".jpeg", ".png", ".webp", ".gif" };
-
-        private static readonly string[] AllowedAvatarMimeTypes = { "image/jpeg", "image/png", "image/webp", "image/gif" };
-
-        /// <summary>
-        /// Confirms the leading bytes match JPEG, PNG, GIF or WebP before we accept the upload.
-        /// </summary>
-        private static async Task<bool> HasImageMagicBytesAsync(IFormFile file)
-        {
-            var header = new byte[12];
-            await using var stream = file.OpenReadStream();
-
-            var read = await stream.ReadAsync(header.AsMemory(0, header.Length));
-            if (read < 12) return false;
-
-            // JPEG: FF D8 FF
-            if (header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF) return true;
-
-            // PNG: 89 50 4E 47 0D 0A 1A 0A
-            if (header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47 &&
-                header[4] == 0x0D && header[5] == 0x0A && header[6] == 0x1A && header[7] == 0x0A) return true;
-
-            // GIF: "GIF8"
-            if (header[0] == 0x47 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x38) return true;
-
-            // WebP: "RIFF" .... "WEBP"
-            if (header[0] == 0x52 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x46 &&
-                header[8] == 0x57 && header[9] == 0x45 && header[10] == 0x42 && header[11] == 0x50) return true;
-
-            return false;
-        }
 
         private Guid GetUserId()
         {

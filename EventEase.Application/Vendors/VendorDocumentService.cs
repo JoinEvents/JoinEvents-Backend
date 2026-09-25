@@ -13,7 +13,13 @@ namespace EventEase.Application.Vendors
     public class VendorDocumentService : IVendorDocumentService
     {
         private readonly EventEaseDbContext _db;
-        public VendorDocumentService(EventEaseDbContext db) => _db = db;
+        private readonly IFileStorage _fileStorage;
+
+        public VendorDocumentService(EventEaseDbContext db, IFileStorage fileStorage)
+        {
+            _db = db;
+            _fileStorage = fileStorage;
+        }
 
         public async Task<VendorDocument> UploadDocumentAsync(Guid vendorId, string documentType, string fileName, string fileUrl)
         {
@@ -248,6 +254,18 @@ namespace EventEase.Application.Vendors
                 .OrderByDescending(l => l.CreatedAt)
                 .ToListAsync();
 
+            // Verification documents live in a private container, so the stored paths are signed
+            // before they reach the admin UI. Done once per distinct path rather than per vendor.
+            var docLinks = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var path in docs.Select(d => d.FileUrl).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct())
+            {
+                docLinks[path!] = await _fileStorage.GetUrlAsync(path);
+            }
+
+            string? ResolveDocLink(string? path)
+                => string.IsNullOrWhiteSpace(path) ? path
+                   : docLinks.TryGetValue(path, out var link) ? link : path;
+
             var response = new List<object>();
 
             foreach (var v in vendors)
@@ -346,8 +364,8 @@ namespace EventEase.Application.Vendors
                         name = d.FileName,
                         uploadedAt = d.UploadedAt.ToString("yyyy-MM-dd"),
                         status = d.Status,
-                        fileUrl = d.FileUrl,
-                        url = d.FileUrl
+                        fileUrl = ResolveDocLink(d.FileUrl),
+                        url = ResolveDocLink(d.FileUrl)
                     }).ToList(),
                     rating = rating,
                     totalReviews = totalReviews,

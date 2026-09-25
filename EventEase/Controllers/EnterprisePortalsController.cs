@@ -23,14 +23,17 @@ namespace EventEase.Api.Controllers
         private readonly IMessengerService _messenger;
         private readonly INotificationService _notifications;
         private readonly IHubContext<ChatHub> _hubContext;
+        private readonly IFileStorage _fileStorage;
 
         public EnterprisePortalsController(
             IPortalsService portals,
             IVendorDocumentService documents,
             IMessengerService messenger,
             INotificationService notifications,
-            IHubContext<ChatHub> hubContext)
+            IHubContext<ChatHub> hubContext,
+            IFileStorage fileStorage)
         {
+            _fileStorage = fileStorage;
             _portals = portals;
             _documents = documents;
             _messenger = messenger;
@@ -88,7 +91,18 @@ namespace EventEase.Api.Controllers
         public async Task<IActionResult> UploadDocuments([FromForm] string documentType, Microsoft.AspNetCore.Http.IFormFile file)
         {
             var userId = GetUserId();
-            var doc = await _documents.UploadDocumentAsync(userId, documentType ?? "GST Certificate", file?.FileName ?? "gst_cert.pdf", "/uploads/" + (file?.FileName ?? "gst_cert.pdf"));
+
+            // The file used to be thrown away: the row recorded "/uploads/{name}", a path nothing
+            // ever wrote to, so every document here was unreadable. Store it for real.
+            if (file is null || file.Length == 0)
+                return BadRequest(new { error = "No file uploaded." });
+
+            var storedPath = await _fileStorage.SaveAsync(
+                $"vendors/{userId}/verification", file.FileName, file.OpenReadStream(), file.ContentType);
+
+            var doc = await _documents.UploadDocumentAsync(
+                userId, documentType ?? "GST Certificate", file.FileName, storedPath);
+
             return Ok(new
             {
                 documentId = "doc_" + doc.Id.ToString().Substring(0, 6),

@@ -1,40 +1,22 @@
 using Google.Cloud.Storage.V1;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Configuration;
-using System;
-using System.IO;
-using System.Threading.Tasks;
 
 namespace EventEase.Application.Blob
 {
+    /// <summary>
+    /// Stores uploads as objects in a Google Cloud Storage bucket.
+    ///
+    /// The legacy provider, kept so a deployment that has not moved to Azure yet still works.
+    /// Object names are "{userId}/{guid}{ext}" — the prefix is what the ownership checks in
+    /// UserController match on, so it must stay the first path segment.
+    /// </summary>
     public class GcpBucketService : IBlobService
     {
-        private readonly Lazy<StorageClient> _lazyStorageClient;
-        private readonly string _bucketName;
+        private readonly GcsClientProvider _provider;
 
-        private StorageClient Storage => _lazyStorageClient.Value;
-
-        public GcpBucketService(IConfiguration config)
+        public GcpBucketService(GcsClientProvider provider)
         {
-            _bucketName = config["Gcp:BucketName"] ?? string.Empty;
-            var credentialsPath = config["Gcp:CredentialsPath"];
-
-            if (!string.IsNullOrEmpty(credentialsPath))
-            {
-                Environment.SetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
-            }
-
-            // Constructed on first use rather than at registration. This service is a singleton
-            // injected into several controllers, so throwing in the constructor took down
-            // endpoints that never touch object storage. ProjectId is not required for object
-            // operations — application default credentials supply it.
-            _lazyStorageClient = new Lazy<StorageClient>(() =>
-            {
-                if (string.IsNullOrEmpty(_bucketName))
-                    throw new InvalidOperationException("Gcp:BucketName is not configured.");
-
-                return StorageClient.Create();
-            }, isThreadSafe: true);
+            _provider = provider;
         }
 
         public async Task<string> UploadAsync(IFormFile file, string userId)
@@ -42,26 +24,22 @@ namespace EventEase.Application.Blob
             if (file == null || file.Length == 0)
                 throw new ArgumentException("File is empty", nameof(file));
 
-            // Create a unique blob name with user folder structure
-            var fileName = $"{userId}/{Guid.NewGuid()}{Path.GetExtension(file.FileName)}";
+            var extension = StoragePaths.SanitizeExtension(Path.GetExtension(file.FileName));
+            var prefix = string.IsNullOrWhiteSpace(userId) ? "shared" : userId;
+            var objectName = $"{prefix}/{Guid.NewGuid()}{extension}";
 
             try
             {
                 using var stream = file.OpenReadStream();
-                
-                // Upload to GCS with metadata
-                var obj = await Storage.UploadObjectAsync(
-                    _bucketName,
-                    fileName,
+
+                await _provider.Storage.UploadObjectAsync(
+                    _provider.BucketName,
+                    objectName,
                     file.ContentType,
                     stream,
-                    new UploadObjectOptions
-                    {
-                        PredefinedAcl = PredefinedObjectAcl.Private
-                    }
-                );
+                    new UploadObjectOptions { PredefinedAcl = PredefinedObjectAcl.Private });
 
-                return fileName;
+                return objectName;
             }
             catch (Exception ex)
             {
@@ -76,12 +54,8 @@ namespace EventEase.Application.Blob
 
             try
             {
-                var obj = await Storage.GetObjectAsync(_bucketName, blobName);
-                if (obj == null)
-                    return null;
-
                 var memoryStream = new MemoryStream();
-                await Storage.DownloadObjectAsync(_bucketName, blobName, memoryStream);
+                await _provider.Storage.DownloadObjectAsync(_provider.BucketName, blobName, memoryStream);
                 memoryStream.Position = 0;
                 return memoryStream;
             }
@@ -102,7 +76,7 @@ namespace EventEase.Application.Blob
 
             try
             {
-                await Storage.DeleteObjectAsync(_bucketName, blobName);
+                await _provider.Storage.DeleteObjectAsync(_provider.BucketName, blobName);
                 return true;
             }
             catch (Google.GoogleApiException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.NotFound)
@@ -114,5 +88,9 @@ namespace EventEase.Application.Blob
                 throw new InvalidOperationException($"Failed to delete file from GCP bucket: {ex.Message}", ex);
             }
         }
+
+        public Task<string> GetUrlAsync(string blobName) => _provider.GetUrlAsync(blobName);
+
+        public string? TryResolveBlobName(string? url) => _provider.TryResolveObjectName(url);
     }
 }

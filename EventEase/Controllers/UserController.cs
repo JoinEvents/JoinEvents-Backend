@@ -33,6 +33,37 @@ namespace EventEase.Api.Controllers
             return Ok(new { FilePath = filePath });
         }
 
+        /// <summary>
+        /// Uploads an image and returns a URL that can be stored on a record and rendered
+        /// directly — a vendor's portfolio shot, an inclusion photo.
+        ///
+        /// Distinct from /support/upload, which these went through before: that endpoint writes to
+        /// the private documents container, where a link expires. Anything meant to stay on a
+        /// record and be displayed belongs here.
+        /// </summary>
+        [HttpPost("images")]
+        public async Task<IActionResult> UploadImage(IFormFile file)
+        {
+            var validationError = await ImageUploadValidator.ValidateAsync(file);
+            if (validationError is not null)
+                return BadRequest(new { error = validationError });
+
+            var userId = GetUserId();
+            if (userId == Guid.Empty) return Unauthorized(new { error = "Invalid token." });
+
+            try
+            {
+                var blobName = await _blobService.UploadAsync(file, userId.ToString());
+                var url = await _blobService.GetUrlAsync(blobName);
+                return Ok(new { url, path = blobName });
+            }
+            catch (Exception ex)
+            {
+                Serilog.Log.Error(ex, "Failed to upload image for user {UserId}", userId);
+                return StatusCode(502, new { error = "Image storage is unavailable. Please try again." });
+            }
+        }
+
         [HttpGet("download")]
         public async Task<IActionResult> Download([FromQuery] string path)
         {
@@ -59,6 +90,13 @@ namespace EventEase.Api.Controllers
         /// <summary>
         /// True when the blob sits under the caller's own prefix, or the caller is staff.
         /// Rejects traversal attempts rather than trying to normalise them.
+        ///
+        /// Note what this does and does not buy: it stops one account reading another's uploads
+        /// through this API. It is not confidentiality for the object itself — these blobs live in
+        /// the media container, which serves anonymous reads so that image URLs stay permanent
+        /// (AzureStorage:MediaPublicAccess). The blob name carries a GUID and is never handed out
+        /// by this endpoint, but anything genuinely sensitive belongs in the private documents
+        /// container via IFileStorage, not here.
         /// </summary>
         private bool IsOwnedByCaller(string? path)
         {
