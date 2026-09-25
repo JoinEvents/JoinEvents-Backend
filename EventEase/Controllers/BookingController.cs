@@ -170,30 +170,38 @@ namespace EventEase.Api.Controllers
                 VendorPayoutAmount = price.VendorPayoutAmount
             };
 
-            // The availability check above and the insert below must not be split by a competing
-            // booking, so they are committed together and the unique index on
-            // (VendorId, EventDate) in VendorBlockedDates backstops the race.
-            await using var tx = await _db.Database.BeginTransactionAsync();
+            var services = BuildBookingServices(booking.Id, price.Lines);
+            var log = new BookingLog
+            {
+                Id = Guid.NewGuid(),
+                BookingId = booking.Id,
+                Message = $"Booking created for {price.TotalAmount:0.00} (advance {price.AdvanceAmount:0.00}).",
+                Actor = "Customer",
+                CreatedAt = DateTime.UtcNow
+            };
+
+            // The booking, its service checklist and its log are written together, through the
+            // execution strategy: production retries transient SQL failures and refuses a
+            // transaction opened outside it (every booking used to fail with a 500 for that
+            // reason). Each attempt starts from a clean change tracker so a retry adds each row
+            // once. The unique index on (VendorId, EventDate) in VendorBlockedDates backstops a
+            // competing booking for the same date.
             try
             {
-                _db.Bookings.Add(booking);
-                _db.BookingServices.AddRange(BuildBookingServices(booking.Id, price.Lines));
-
-                _db.BookingLogs.Add(new BookingLog
+                var strategy = _db.Database.CreateExecutionStrategy();
+                await strategy.ExecuteAsync(async () =>
                 {
-                    Id = Guid.NewGuid(),
-                    BookingId = booking.Id,
-                    Message = $"Booking created for {price.TotalAmount:0.00} (advance {price.AdvanceAmount:0.00}).",
-                    Actor = "Customer",
-                    CreatedAt = DateTime.UtcNow
+                    _db.ChangeTracker.Clear();
+                    await using var tx = await _db.Database.BeginTransactionAsync();
+                    _db.Bookings.Add(booking);
+                    _db.BookingServices.AddRange(services);
+                    _db.BookingLogs.Add(log);
+                    await _db.SaveChangesAsync();
+                    await tx.CommitAsync();
                 });
-
-                await _db.SaveChangesAsync();
-                await tx.CommitAsync();
             }
             catch (DbUpdateException)
             {
-                await tx.RollbackAsync();
                 return Conflict(new { error = "That date was just taken. Please choose another date." });
             }
 
@@ -796,78 +804,108 @@ namespace EventEase.Api.Controllers
             }
 
             // [SECURITY] The outcome is read back from the payment provider. The client's own
-            // claim about whether the payment succeeded is not trusted.
+            // claim about whether the payment succeeded is not trusted. Asked once, outside the
+            // retried unit below.
             var ok = await _gateway.VerifyPaymentAsync(req.ProviderRef);
-            payment.Status = ok ? "Succeeded" : "Failed";
+            var paymentId = payment.Id;
+            var bookingId = booking.Id;
+            string resultStatus = ok ? "Succeeded" : "Failed";
 
             // The payment record, the booking status, the loyalty award and the RFP close are one
             // unit of work: a partial commit would leave a booking paid with no points, or points
-            // awarded for a booking that never advanced.
-            await using var tx = await _db.Database.BeginTransactionAsync();
-
-            if (ok)
+            // awarded for a booking that never advanced. It runs through the execution strategy
+            // (production retries transient SQL failures, and refuses a transaction opened outside
+            // it), and each attempt starts from freshly loaded rows so a retry never applies the
+            // payment, the status change or the points twice.
+            var strategy = _db.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(async () =>
             {
-                var paidBefore = await SucceededTotalAsync(booking.Id, except: payment.Id);
-                var fullyPaid = paidBefore + payment.Amount >= booking.TotalAmount;
+                _db.ChangeTracker.Clear();
+                await using var tx = await _db.Database.BeginTransactionAsync();
 
-                // The first payment on a pending booking (the advance, or the whole total) moves it
-                // to Paid so the vendor can confirm it. Clearing the balance records the booking as
-                // fully paid; it is Settled only once the event itself is completed, so paying early
-                // never skips the vendor's confirmation or the event.
-                var wasPending = booking.Status.Equals(BookingStatuses.Pending, StringComparison.OrdinalIgnoreCase);
-                if (wasPending)
+                var current = await _db.Payments.FirstAsync(p => p.Id == paymentId);
+                if (!current.Status.Equals("Initiated", StringComparison.OrdinalIgnoreCase))
                 {
-                    booking.Status = BookingStatuses.Paid;
+                    // Applied by a concurrent confirm; nothing more to do.
+                    resultStatus = current.Status;
+                    return;
                 }
-                if (fullyPaid)
+                current.Status = ok ? "Succeeded" : "Failed";
+
+                if (ok)
                 {
-                    booking.FinalPaidAmount = booking.TotalAmount;
-                    if (booking.Status.Equals(BookingStatuses.Completed, StringComparison.OrdinalIgnoreCase))
-                    {
-                        booking.Status = BookingStatuses.Settled;
-                    }
+                    var target = await _db.Bookings.FirstAsync(b => b.Id == bookingId);
+                    await ApplyPaymentAsync(target, current);
                 }
 
-                _db.BookingLogs.Add(new BookingLog
-                {
-                    Id = Guid.NewGuid(),
-                    BookingId = booking.Id,
-                    Message = (wasPending, fullyPaid) switch
-                    {
-                        (true, true) => "Full payment confirmed by the payment provider.",
-                        (true, false) => "Advance payment confirmed by the payment provider.",
-                        (false, true) => booking.Status == BookingStatuses.Settled
-                            ? "Balance payment confirmed by the payment provider; booking settled."
-                            : "Balance payment confirmed by the payment provider; booking fully paid.",
-                        _ => "Payment confirmed by the payment provider."
-                    },
-                    Actor = "System",
-                    CreatedAt = DateTime.UtcNow
-                });
+                await _db.SaveChangesAsync();
+                await tx.CommitAsync();
+            });
 
-                // Award points: 10 points for every 100 spent in this specific payment transaction.
-                int pointsEarned = (int)(payment.Amount / 100) * 10;
-                if (pointsEarned > 0)
-                {
-                    string description = $"Earned points for Booking BK-{booking.Id.ToString().Substring(0, 8).ToUpper()}";
-                    await _loyaltyService.AddPointsAsync(booking.UserId, pointsEarned, description, booking.Id);
-                }
+            return Ok(new { status = resultStatus });
+        }
 
-                // Close RFP if booking is linked to one
-                if (booking.RfpId.HasValue)
+        /// <summary>
+        /// Records a successful payment on its booking: status, full payment, the log line, the
+        /// customer's points and the linked quote request.
+        /// </summary>
+        private async Task ApplyPaymentAsync(Booking booking, Payment payment)
+        {
+            var paidBefore = await SucceededTotalAsync(booking.Id, except: payment.Id);
+            var fullyPaid = paidBefore + payment.Amount >= booking.TotalAmount;
+
+            // The first payment on a pending booking (the advance, or the whole total) moves it
+            // to Paid so the vendor can confirm it. Clearing the balance records the booking as
+            // fully paid; it is Settled only once the event itself is completed, so paying early
+            // never skips the vendor's confirmation or the event.
+            var wasPending = booking.Status.Equals(BookingStatuses.Pending, StringComparison.OrdinalIgnoreCase);
+            if (wasPending)
+            {
+                booking.Status = BookingStatuses.Paid;
+            }
+            if (fullyPaid)
+            {
+                booking.FinalPaidAmount = booking.TotalAmount;
+                if (booking.Status.Equals(BookingStatuses.Completed, StringComparison.OrdinalIgnoreCase))
                 {
-                    var rfp = await _db.Rfps.FindAsync(booking.RfpId.Value);
-                    if (rfp != null && rfp.Status == "bid_selected")
-                    {
-                        rfp.Status = "closed";
-                    }
+                    booking.Status = BookingStatuses.Settled;
                 }
             }
 
-            await _db.SaveChangesAsync();
-            await tx.CommitAsync();
+            _db.BookingLogs.Add(new BookingLog
+            {
+                Id = Guid.NewGuid(),
+                BookingId = booking.Id,
+                Message = (wasPending, fullyPaid) switch
+                {
+                    (true, true) => "Full payment confirmed by the payment provider.",
+                    (true, false) => "Advance payment confirmed by the payment provider.",
+                    (false, true) => booking.Status == BookingStatuses.Settled
+                        ? "Balance payment confirmed by the payment provider; booking settled."
+                        : "Balance payment confirmed by the payment provider; booking fully paid.",
+                    _ => "Payment confirmed by the payment provider."
+                },
+                Actor = "System",
+                CreatedAt = DateTime.UtcNow
+            });
 
-            return Ok(new { status = payment.Status });
+            // Award points: 10 points for every 100 spent in this specific payment transaction.
+            int pointsEarned = (int)(payment.Amount / 100) * 10;
+            if (pointsEarned > 0)
+            {
+                string description = $"Earned points for Booking BK-{booking.Id.ToString().Substring(0, 8).ToUpper()}";
+                await _loyaltyService.AddPointsAsync(booking.UserId, pointsEarned, description, booking.Id);
+            }
+
+            // Close RFP if booking is linked to one
+            if (booking.RfpId.HasValue)
+            {
+                var rfp = await _db.Rfps.FindAsync(booking.RfpId.Value);
+                if (rfp != null && rfp.Status == "bid_selected")
+                {
+                    rfp.Status = "closed";
+                }
+            }
         }
 
         [Authorize]

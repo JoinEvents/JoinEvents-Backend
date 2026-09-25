@@ -11,11 +11,12 @@ namespace EventEase.Tests
 {
     /// <summary>
     /// The customer journey end to end: price a package, book it with the catalogue's own ids,
-    /// read the booking back and pay for it — the advance, or the whole amount.
+    /// read the booking back and pay for it — the advance, or the whole amount. Runs on a
+    /// relational database with a retrying execution strategy, as production does.
     /// </summary>
-    public class BookingFlowTests : IClassFixture<TestWebApplicationFactory>
+    public class BookingFlowTests : IClassFixture<RelationalTestWebApplicationFactory>
     {
-        private readonly TestWebApplicationFactory _factory;
+        private readonly RelationalTestWebApplicationFactory _factory;
         private readonly HttpClient _client;
 
         // Catering ₹500/plate, Venue ₹50,000, Decor ₹20,000 — prices before GST.
@@ -23,10 +24,11 @@ namespace EventEase.Tests
             "Our wedding package.\n\n---INCLUSION_DETAILS---\n" +
             "{\"Catering\":{\"minPrice\":500,\"maxPrice\":500},\"Venue\":{\"minPrice\":50000,\"maxPrice\":50000},\"Decor\":{\"minPrice\":20000,\"maxPrice\":20000}}";
 
-        public BookingFlowTests(TestWebApplicationFactory factory)
+        public BookingFlowTests(RelationalTestWebApplicationFactory factory)
         {
             _factory = factory;
             _client = factory.CreateClient();
+            _factory.EnsureDatabase();
         }
 
         [Fact]

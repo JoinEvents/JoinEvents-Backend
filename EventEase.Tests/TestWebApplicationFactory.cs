@@ -48,6 +48,15 @@ namespace EventEase.Tests
             Environment.SetEnvironmentVariable("Database__SeedDemoData", "false");
         }
 
+        /// <summary>The database the API runs against; in-memory unless a fixture needs more.</summary>
+        protected virtual void ConfigureDatabase(DbContextOptionsBuilder options)
+        {
+            // The in-memory store has no transactions; the booking endpoints open one, so the
+            // warning it raises is ignored rather than thrown.
+            options.UseInMemoryDatabase(_databaseName)
+                .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning));
+        }
+
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Development");
@@ -67,11 +76,7 @@ namespace EventEase.Tests
                     services.Remove(descriptor);
                 }
 
-                // The in-memory store has no transactions; the booking endpoints open one, so the
-                // warning it raises is ignored rather than thrown.
-                services.AddDbContext<EventEaseDbContext>(options =>
-                    options.UseInMemoryDatabase(_databaseName)
-                        .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning)));
+                services.AddDbContext<EventEaseDbContext>(ConfigureDatabase);
             });
         }
     }
