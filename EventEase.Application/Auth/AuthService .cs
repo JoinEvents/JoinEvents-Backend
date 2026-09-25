@@ -243,7 +243,7 @@ namespace EventEase.Application.Auth
                     UserId = user.Id,
                     BusinessName = dto.businessName ?? $"{dto.name}'s Services",
                     Description = "Vendor partner offering event services.",
-                    Location = dto.city ?? "Hyderabad",
+                    Location = dto.city ?? string.Empty,
                     IsValidated = false
                 };
                 _db.Vendors.Add(vendor);
@@ -336,9 +336,9 @@ namespace EventEase.Application.Auth
                 user.Name,
                 user.Email,
                 user.Phone ?? string.Empty,
-                user.City ?? "Hyderabad",
-                user.Address ?? "123, Jubilee Hills, Hyderabad, Telangana",
-                user.Bio ?? "Looking for the best event planners for my family functions.",
+                user.City ?? string.Empty,
+                user.Address ?? string.Empty,
+                user.Bio ?? string.Empty,
                 user.CreatedAt.ToString("yyyy-MM-dd"),
                 "active",
                 user.LoyaltyPoints,
@@ -390,9 +390,9 @@ namespace EventEase.Application.Auth
                 user.Name,
                 user.Email,
                 user.Phone ?? string.Empty,
-                user.City ?? "Hyderabad",
-                user.Address ?? "123, Jubilee Hills, Hyderabad, Telangana",
-                user.Bio ?? "Looking for the best event planners for my family functions.",
+                user.City ?? string.Empty,
+                user.Address ?? string.Empty,
+                user.Bio ?? string.Empty,
                 user.CreatedAt.ToString("yyyy-MM-dd"),
                 "active",
                 user.LoyaltyPoints,
@@ -613,7 +613,6 @@ namespace EventEase.Application.Auth
                     CreatedAt = DateTime.UtcNow,
                     ReferralCode = generatedCode,
                     Avatar = profile.avatar,
-                    City = "Hyderabad",
                     LoyaltyPoints = 200,
                     LoyaltyTier = "Gold Member"
                 };
