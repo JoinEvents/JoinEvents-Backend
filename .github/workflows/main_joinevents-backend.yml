@@ -75,7 +75,7 @@ jobs:
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v3
         with:
-          app-name: 'JoinEvents-Backend'
+          app-name: 'joinevents-api-chiru'
           slot-name: 'Production'
           package: .
           
