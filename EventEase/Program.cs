@@ -227,8 +227,13 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-builder.Services.AddDbContext<EventEaseDbContext>(o =>
-  o.UseSqlServer(connectionString, sql =>
+// Pushes each saved notification to its owner over the hub (see NotificationPushInterceptor).
+builder.Services.AddSingleton<EventEase.Api.Realtime.IRealtimeNotifier, EventEase.Api.Realtime.RealtimeNotifier>();
+builder.Services.AddSingleton<EventEase.Api.Realtime.NotificationPushInterceptor>();
+
+builder.Services.AddDbContext<EventEaseDbContext>((sp, o) =>
+  o.AddInterceptors(sp.GetRequiredService<EventEase.Api.Realtime.NotificationPushInterceptor>())
+   .UseSqlServer(connectionString, sql =>
   {
       // Compatibility level 120 keeps OPENJSON-based translations off, which SQL Server 2014
       // cannot parse in Contains() queries.

@@ -10,6 +10,8 @@ using Microsoft.EntityFrameworkCore;
 using static EventEase.Application.Checkout.Dtos;
 using EventEase.Application.Loyalty;
 using EventEase.Application.Vendors;
+using EventEase.Application.Chat;
+using EventEase.Api.Realtime;
 
 namespace EventEase.Api.Controllers
 {
@@ -23,14 +25,20 @@ namespace EventEase.Api.Controllers
         private readonly ILoyaltyService _loyaltyService;
         private readonly IVendorCalendarService _calendarService;
         private readonly IBookingPricingService _pricing;
+        private readonly IMessengerService _messenger;
+        private readonly IRealtimeNotifier _realtime;
 
         public BookingController(
             EventEaseDbContext db,
             IPaymentGateway gateway,
             ILoyaltyService loyaltyService,
             IVendorCalendarService calendarService,
-            IBookingPricingService pricing)
+            IBookingPricingService pricing,
+            IMessengerService messenger,
+            IRealtimeNotifier realtime)
         {
+            _messenger = messenger;
+            _realtime = realtime;
             _db = db;
             _gateway = gateway;
             _loyaltyService = loyaltyService;
@@ -1008,7 +1016,32 @@ namespace EventEase.Api.Controllers
             });
 
             await _db.SaveChangesAsync();
-            return Ok(new { success = true, status = target });
+
+            // A confirmed booking opens the conversation between the customer and the vendor, with
+            // the booking's details as its first message, pushed live to both.
+            string? threadId = null;
+            if (target.Equals(BookingStatuses.Confirmed, StringComparison.OrdinalIgnoreCase))
+            {
+                threadId = await OpenBookingConversationAsync(booking);
+            }
+
+            return Ok(new { success = true, status = BookingStatuses.ToClient(target), threadId });
+        }
+
+        private async Task<string?> OpenBookingConversationAsync(Booking booking)
+        {
+            var vendorUserId = await _db.Vendors.AsNoTracking()
+                .Where(v => v.Id == booking.VendorId || v.UserId == booking.VendorId)
+                .Select(v => (Guid?)v.UserId)
+                .FirstOrDefaultAsync();
+            if (vendorUserId is not { } vendorUser || vendorUser == Guid.Empty) return null;
+
+            var reference = $"BK-{booking.Id.ToString()[..8].ToUpperInvariant()}";
+            var note = $"Booking {reference} for '{booking.EventName}' on {booking.EventDate:d MMM yyyy} is confirmed. " +
+                       "Message me here with any questions or details for your event.";
+            var message = await _messenger.OpenBookingThreadAsync(booking.UserId, vendorUser, booking.RfpId, note);
+            await _realtime.MessageAsync(new[] { booking.UserId, vendorUser }, message);
+            return message.ThreadId;
         }
 
         /// <summary>The customer-facing note for a status the vendor or support has set.</summary>
@@ -1017,7 +1050,7 @@ namespace EventEase.Api.Controllers
             var name = booking.EventName;
             return BookingStatuses.Normalize(status) switch
             {
-                BookingStatuses.Confirmed => ("Booking confirmed", $"Your vendor confirmed '{name}' on {booking.EventDate:d MMM yyyy}."),
+                BookingStatuses.Confirmed => ("Booking confirmed", $"Your vendor confirmed '{name}' on {booking.EventDate:d MMM yyyy}. You can now chat with them in Messages."),
                 BookingStatuses.Rejected => ("Booking declined", $"The vendor could not take '{name}'. Any payment will be refunded."),
                 BookingStatuses.InProgress => ("Your event has started", $"The vendor has started '{name}'."),
                 BookingStatuses.Completed => ("Event completed", $"'{name}' is marked as completed. Leave a review for your vendor."),

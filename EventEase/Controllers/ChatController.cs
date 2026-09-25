@@ -21,14 +21,14 @@ namespace EventEase.Api.Controllers
         [HttpGet("threads")]
         public async Task<IActionResult> GetThreads()
         {
-            var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub));
-            var threads = await _messengerService.GetThreadsAsync(userId);
+            var threads = await _messengerService.GetThreadsAsync(GetUserId());
             return Ok(threads);
         }
 
         [HttpGet("threads/{threadId}/alive")]
         public async Task<IActionResult> IsThreadAlive(Guid threadId)
         {
+            if (!await _messengerService.IsParticipantAsync(threadId, GetUserId())) return Forbid();
             var isAlive = await _messengerService.IsChatSessionAliveAsync(threadId);
             return Ok(new { IsAlive = isAlive });
         }
@@ -37,13 +37,20 @@ namespace EventEase.Api.Controllers
         public async Task<IActionResult> GetMessages(Guid threadId)
         {
             // [SECURITY] Verify the current user is a participant in this thread
-            var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub));
-            var threads = await _messengerService.GetThreadsAsync(userId);
-            if (!threads.Any(t => t.ThreadId == threadId.ToString()))
-                return Forbid();
+            if (!await _messengerService.IsParticipantAsync(threadId, GetUserId())) return Forbid();
 
             var messages = await _messengerService.GetMessagesAsync(threadId);
             return Ok(messages);
+        }
+
+        /// <summary>
+        /// The caller's id. The sub claim is mapped to NameIdentifier by the JWT handler, so reading
+        /// "sub" alone found nothing and Guid.Parse threw on every call.
+        /// </summary>
+        private Guid GetUserId()
+        {
+            var value = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+            return Guid.TryParse(value, out var id) ? id : Guid.Empty;
         }
     }
 }

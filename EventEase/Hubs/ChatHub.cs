@@ -1,3 +1,4 @@
+using EventEase.Api.Realtime;
 using EventEase.Application.Chat;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
@@ -10,8 +11,27 @@ namespace EventEase.Api.Hubs
     public class ChatHub : Hub
     {
         private readonly IMessengerService _messengerService;
+        private readonly IRealtimeNotifier _notifier;
 
-        public ChatHub(IMessengerService messengerService) => _messengerService = messengerService;
+        public ChatHub(IMessengerService messengerService, IRealtimeNotifier notifier)
+        {
+            _messengerService = messengerService;
+            _notifier = notifier;
+        }
+
+        /// <summary>
+        /// Every connection joins its user's group, so messages and notifications reach the user
+        /// on every open app and tab without subscribing to each conversation.
+        /// </summary>
+        public override async Task OnConnectedAsync()
+        {
+            var userId = GetUserId();
+            if (userId != Guid.Empty)
+            {
+                await Groups.AddToGroupAsync(Context.ConnectionId, RealtimeNotifier.UserGroup(userId));
+            }
+            await base.OnConnectedAsync();
+        }
 
         public async Task SendMessage(Guid threadId, string message)
         {
@@ -34,7 +54,7 @@ namespace EventEase.Api.Hubs
 
             if (result != null)
             {
-                await Clients.Group(threadId.ToString()).SendAsync("ReceiveMessage", result);
+                await _notifier.MessageAsync(await _messengerService.ParticipantUserIdsAsync(threadId), result);
             }
             else
             {

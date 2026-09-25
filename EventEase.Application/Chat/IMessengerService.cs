@@ -12,9 +12,21 @@ namespace EventEase.Application.Chat
         Task<bool> IsChatSessionAliveAsync(Guid threadId);
         Task<List<MessageResponse>> GetMessagesAsync(Guid threadId);
         Task<Guid> RequestChatAsync(Guid customerId, Guid vendorId, Guid? rfpId, string? initialMessage);
-        Task<bool> AcceptChatAsync(Guid threadId);
-        Task<bool> RejectChatAsync(Guid threadId);
+        /// <summary>The vendor on the thread accepts a customer's chat request. False otherwise.</summary>
+        Task<bool> AcceptChatAsync(Guid threadId, Guid vendorUserId);
+        /// <summary>The vendor on the thread declines a customer's chat request. False otherwise.</summary>
+        Task<bool> RejectChatAsync(Guid threadId, Guid vendorUserId);
         Task<bool> MarkAsReadAsync(Guid threadId, Guid userId);
+
+        /// <summary>
+        /// Opens the conversation for a confirmed booking: the customer's thread with the vendor is
+        /// created or reopened as Active and the vendor's note is posted in it. Returns the posted
+        /// message, whose thread id is the conversation.
+        /// </summary>
+        Task<MessageResponse> OpenBookingThreadAsync(Guid customerId, Guid vendorUserId, Guid? rfpId, string note);
+
+        /// <summary>The customer's and the vendor's user ids, for pushing a thread's events.</summary>
+        Task<IReadOnlyList<Guid>> ParticipantUserIdsAsync(Guid threadId);
 
         /// <summary>
         /// True when the user is the customer or the vendor on this thread. Callers must check
