@@ -211,6 +211,16 @@ namespace EventEase.Api.Controllers
             return Ok((await MapBookingsToDtosAsync(new List<Booking> { booking })).Single());
         }
 
+        /// <summary>What has been paid on a booking so far (summed in memory: there are only a few).</summary>
+        private async Task<decimal> SucceededTotalAsync(Guid bookingId, Guid? except = null)
+        {
+            var amounts = await _db.Payments
+                .Where(p => p.BookingId == bookingId && p.Status == "Succeeded" && (except == null || p.Id != except))
+                .Select(p => p.Amount)
+                .ToListAsync();
+            return amounts.Sum();
+        }
+
         private async Task<Package?> FindPackageAsync(string? rawId)
         {
             var id = ParseId(rawId);
@@ -354,12 +364,14 @@ namespace EventEase.Api.Controllers
                 .Select(p => new { p.Id, p.Category })
                 .ToDictionaryAsync(p => p.Id, p => p.Category);
 
-            var paidByBooking = await _db.Payments
-                .AsNoTracking()
-                .Where(p => bookingIds.Contains(p.BookingId) && p.Status == "Succeeded")
+            // Summed in memory: a booking has only a handful of payments.
+            var paidByBooking = (await _db.Payments
+                    .AsNoTracking()
+                    .Where(p => bookingIds.Contains(p.BookingId) && p.Status == "Succeeded")
+                    .Select(p => new { p.BookingId, p.Amount })
+                    .ToListAsync())
                 .GroupBy(p => p.BookingId)
-                .Select(g => new { BookingId = g.Key, Paid = g.Sum(p => p.Amount) })
-                .ToDictionaryAsync(g => g.BookingId, g => g.Paid);
+                .ToDictionary(g => g.Key, g => g.Sum(p => p.Amount));
 
             var createdByBooking = await _db.BookingLogs
                 .AsNoTracking()
@@ -728,9 +740,7 @@ namespace EventEase.Api.Controllers
 
             // A pending booking pays the advance, or the whole total when the customer chooses to;
             // anything further along pays whatever is still outstanding.
-            var alreadyPaid = await _db.Payments
-                .Where(p => p.BookingId == booking.Id && p.Status == "Succeeded")
-                .SumAsync(p => (decimal?)p.Amount) ?? 0m;
+            var alreadyPaid = await SucceededTotalAsync(booking.Id);
             var isPending = booking.Status.Equals(BookingStatuses.Pending, StringComparison.OrdinalIgnoreCase);
             decimal amountToPay = isPending && !req.PayInFull
                 ? booking.AdvanceAmount
@@ -797,9 +807,7 @@ namespace EventEase.Api.Controllers
 
             if (ok)
             {
-                var paidBefore = await _db.Payments
-                    .Where(p => p.BookingId == booking.Id && p.Status == "Succeeded" && p.Id != payment.Id)
-                    .SumAsync(p => (decimal?)p.Amount) ?? 0m;
+                var paidBefore = await SucceededTotalAsync(booking.Id, except: payment.Id);
                 var fullyPaid = paidBefore + payment.Amount >= booking.TotalAmount;
 
                 // The first payment on a pending booking (the advance, or the whole total) moves it
