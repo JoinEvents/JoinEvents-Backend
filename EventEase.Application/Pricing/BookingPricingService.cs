@@ -13,7 +13,10 @@ namespace EventEase.Application.Pricing
         IReadOnlyList<Guid>? ServiceIds,
         string? MealPreference);
 
-    /// <summary>The authoritative, server-computed cost of a booking.</summary>
+    /// <summary>
+    /// The authoritative, server-computed cost of a booking. <see cref="Lines"/> are before GST and
+    /// add up to <see cref="Subtotal"/>; <see cref="TotalAmount"/> is the subtotal plus GST.
+    /// </summary>
     public record BookingPriceResult(
         decimal TotalAmount,
         decimal AdvanceAmount,
@@ -21,9 +24,20 @@ namespace EventEase.Application.Pricing
         decimal PlatformFeeAmount,
         decimal VendorPayoutAmount,
         string? PackageName,
-        IReadOnlyList<BookingPriceLine> Lines);
+        IReadOnlyList<BookingPriceLine> Lines)
+    {
+        public decimal Subtotal { get; init; }
+        public decimal GstRate { get; init; }
+        public decimal GstAmount { get; init; }
+        public decimal AdvanceRate { get; init; }
+        public int? MaxGuests { get; init; }
+    }
 
-    public record BookingPriceLine(string Description, decimal Amount);
+    /// <summary>One priced item. <see cref="Detail"/> explains the amount, e.g. "₹450 × 200 guests".</summary>
+    public record BookingPriceLine(string Description, decimal Amount)
+    {
+        public string? Detail { get; init; }
+    }
 
     public interface IBookingPricingService
     {
@@ -57,8 +71,10 @@ namespace EventEase.Application.Pricing
                 throw new BusinessRuleException("Guest count exceeds the supported maximum.");
 
             var lines = new List<BookingPriceLine>();
-            decimal total = 0m;
+            decimal subtotal = 0m;
+            decimal gst = 0m;
             string? packageName = null;
+            int? maxGuests = null;
 
             if (request.PackageId.HasValue)
             {
@@ -74,13 +90,40 @@ namespace EventEase.Application.Pricing
                     throw new BusinessRuleException("The selected package is no longer available.");
 
                 packageName = package.Name;
+                maxGuests = package.Capacity?.MaxGuests is > 0 ? package.Capacity.MaxGuests : null;
+                if (maxGuests.HasValue && request.GuestCount > maxGuests.Value)
+                    throw new BusinessRuleException($"This package caters for up to {maxGuests.Value} guests.");
 
-                var packageAmount = PricePackage(package.Pricing, request.GuestCount, request.MealPreference);
-                if (packageAmount <= 0)
-                    throw new BusinessRuleException("The selected package has no price configured. Please contact the vendor.");
+                var services = PackageInclusionPricing.Parse(package.Description);
+                if (services is not null)
+                {
+                    // Priced per service for the guests actually booked: per-plate catering scales
+                    // with the guest count, everything else is a flat price. GST is added on top.
+                    decimal packageSubtotal = 0m;
+                    foreach (var service in services)
+                    {
+                        var amount = Round(service.AmountFor(request.GuestCount));
+                        if (amount <= 0) continue;
+                        packageSubtotal += amount;
+                        lines.Add(new BookingPriceLine(service.Name, amount)
+                        {
+                            Detail = service.PerPlate ? $"₹{service.UnitPrice:0.##} per plate × {request.GuestCount} guests" : null
+                        });
+                    }
+                    if (packageSubtotal <= 0)
+                        throw new BusinessRuleException("The selected package has no price configured. Please contact the vendor.");
 
-                total += packageAmount;
-                lines.Add(new BookingPriceLine(package.Name, packageAmount));
+                    subtotal += packageSubtotal;
+                    gst += Round(packageSubtotal * PackageInclusionPricing.GstRate);
+                }
+                else
+                {
+                    var packageAmount = PricePackage(package.Pricing, request.GuestCount, request.MealPreference);
+                    if (packageAmount <= 0)
+                        throw new BusinessRuleException("The selected package has no price configured. Please contact the vendor.");
+
+                    AddGstInclusive(package.Name, packageAmount);
+                }
             }
 
             if (request.ServiceIds is { Count: > 0 })
@@ -99,18 +142,16 @@ namespace EventEase.Application.Pricing
 
                 foreach (var service in services)
                 {
-                    total += service.Price;
-                    lines.Add(new BookingPriceLine(service.Name, service.Price));
+                    AddGstInclusive(service.Name, service.Price);
                 }
             }
 
+            var total = subtotal + gst;
             if (total <= 0)
                 throw new BusinessRuleException("A booking must include at least one package or service.");
 
-            total = decimal.Round(total, 2, MidpointRounding.AwayFromZero);
-
-            var platformFeeAmount = decimal.Round(total * _platformFeeRate, 2, MidpointRounding.AwayFromZero);
-            var advanceAmount = decimal.Round(total * _advanceRate, 2, MidpointRounding.AwayFromZero);
+            var platformFeeAmount = Round(total * _platformFeeRate);
+            var advanceAmount = Round(total * _advanceRate);
             var vendorPayoutAmount = total - platformFeeAmount;
 
             return new BookingPriceResult(
@@ -120,8 +161,28 @@ namespace EventEase.Application.Pricing
                 PlatformFeeAmount: platformFeeAmount,
                 VendorPayoutAmount: vendorPayoutAmount,
                 PackageName: packageName,
-                Lines: lines);
+                Lines: lines)
+            {
+                Subtotal = subtotal,
+                GstRate = PackageInclusionPricing.GstRate,
+                GstAmount = gst,
+                AdvanceRate = _advanceRate,
+                MaxGuests = maxGuests
+            };
+
+            // Catalogue prices other than per-service package details already include GST, so the
+            // GST share is split out of the amount rather than added to it.
+            void AddGstInclusive(string description, decimal amount)
+            {
+                var gross = Round(amount);
+                var net = Round(gross / (1 + PackageInclusionPricing.GstRate));
+                subtotal += net;
+                gst += gross - net;
+                lines.Add(new BookingPriceLine(description, net));
+            }
         }
+
+        private static decimal Round(decimal value) => decimal.Round(value, 2, MidpointRounding.AwayFromZero);
 
         /// <summary>
         /// Resolves a package's price. A flat BasePrice or Rent wins; otherwise the per-plate rate

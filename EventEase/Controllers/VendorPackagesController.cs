@@ -1,5 +1,6 @@
 using EventEase.Application.Blob;
 using EventEase.Application.PackageManagement;
+using EventEase.Application.Pricing;
 using EventEase.Core.Entities;
 using EventEase.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
@@ -748,72 +749,19 @@ namespace EventEase.Api.Controllers
             };
         }
 
-        private class InclusionDetailCsharp
-        {
-            public string Description { get; set; } = string.Empty;
-            public decimal MinPrice { get; set; }
-            public decimal MaxPrice { get; set; }
-            public List<string> Images { get; set; } = new();
-            public List<string> KeyFeatures { get; set; } = new();
-            public List<string> Inclusions { get; set; } = new();
-        }
-
+        /// <summary>
+        /// The package's listed price: its services priced for its full capacity, GST included.
+        /// Bookings are re-priced for the guest count actually booked.
+        /// </summary>
         private decimal CalculateBasePrice(string description, int? maxGuests, decimal? fallbackPrice)
         {
-            if (string.IsNullOrEmpty(description))
-                return fallbackPrice ?? 0;
+            var services = PackageInclusionPricing.Parse(description);
+            if (services is null) return fallbackPrice ?? 0;
 
-            var parts = description.Split(new[] { "---INCLUSION_DETAILS---" }, StringSplitOptions.None);
-            if (parts.Length < 2)
-                return fallbackPrice ?? 0;
+            int guests = maxGuests ?? 100;
+            if (guests <= 0) guests = 100;
 
-            var json = parts[1].Trim();
-            if (string.IsNullOrEmpty(json))
-                return fallbackPrice ?? 0;
-
-            try
-            {
-                var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                var details = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, InclusionDetailCsharp>>(json, options);
-                if (details == null || details.Count == 0)
-                    return fallbackPrice ?? 0;
-
-                decimal subtotal = 0;
-                int guests = maxGuests ?? 100;
-                if (guests <= 0) guests = 100;
-
-                foreach (var kvp in details)
-                {
-                    var serviceName = kvp.Key;
-                    var detail = kvp.Value;
-                    decimal servicePrice = detail.MinPrice;
-
-                    if (serviceName.Contains("catering", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (servicePrice < 5000)
-                        {
-                            subtotal += servicePrice * guests;
-                        }
-                        else
-                        {
-                            subtotal += servicePrice;
-                        }
-                    }
-                    else
-                    {
-                        subtotal += servicePrice;
-                    }
-                }
-
-                // Apply 18% GST
-                decimal calculatedBasePrice = subtotal * 1.18m;
-                return Math.Round(calculatedBasePrice, 2);
-            }
-            catch (Exception ex)
-            {
-                Serilog.Log.Error(ex, "Failed to calculate base price from inclusion details");
-                return fallbackPrice ?? 0;
-            }
+            return PackageInclusionPricing.GstInclusiveTotal(services, guests);
         }
     }
 }

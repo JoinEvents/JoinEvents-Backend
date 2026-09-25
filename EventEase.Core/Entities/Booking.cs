@@ -35,10 +35,10 @@ namespace EventEase.Core.Entities
         public bool VendorStrikeApplied { get; set; } = false;
         public Guid? PackageId { get; set; }
         public string? PackageName { get; set; }
-        public string EventName { get; set; } = "Event Celebration";
-        public string Venue { get; set; } = "Hotel Banquet";
-        public string City { get; set; } = "Mumbai";
-        public int GuestCount { get; set; } = 100;
+        public string EventName { get; set; } = string.Empty;
+        public string Venue { get; set; } = string.Empty;
+        public string City { get; set; } = string.Empty;
+        public int GuestCount { get; set; }
 
         // Platform fee fields
         public decimal PlatformFeeRate { get; set; } = 0;
