@@ -73,12 +73,15 @@ Azure's Deployment Center already created the workflow and its credentials, so a
 `AZUREAPPSERVICE_*` secrets Azure added for you.
 
 Check that `app-name:` in `.github/workflows/main_joinevents-backend.yml` matches the App
-Service you actually want to deploy to. It must be the exact resource name, not just the
-hostname's leading label — with the "unique default hostname" feature Azure now uses for
-new Web Apps, the random suffix is part of the resource name itself, not appended only to
-the hostname. Confirm the real name in the Portal (App Service → Overview → Name) or with
-`az webapp list --query "[].{name:name, host:defaultHostName}"` rather than guessing from
-the URL.
+Service you actually want to deploy to — it is the resource name, not the hostname, and the
+two can differ. The `AZUREAPPSERVICE_*` service principal can only deploy to resources its
+role assignment covers; running
+`az webapp list --query "[].{name:name, host:defaultHostName, resourceGroup:resourceGroup}"`
+from a step with that same login shows exactly what it can see. If the App Service that's
+actually serving production traffic isn't in that list, this workflow cannot deploy to it
+until someone grants that service principal access (Contributor, scoped to that resource or
+its resource group) — don't guess a resource name into `app-name` without confirming it
+appears in that list first.
 
 ### Checking it
 
