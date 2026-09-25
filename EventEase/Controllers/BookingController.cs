@@ -425,8 +425,10 @@ namespace EventEase.Api.Controllers
                 var vendorPhone = vendorUser?.Phone ?? "";
                 var vendorEmail = vendorUser?.Email ?? "";
  
-                string mappedStatus = b.Status.ToLower();
-                if (mappedStatus == "paid") mappedStatus = "confirmed";
+                // The apps' status names: a paid booking waiting for the vendor is "advance_paid"
+                // (it used to be reported as "confirmed", so vendors could not tell it still
+                // needed confirming), and InProgress is "in_progress".
+                string mappedStatus = BookingStatuses.ToClient(b.Status);
 
                 var services = new List<object>();
                 dbServicesGrouped.TryGetValue(b.Id, out var bServices);
@@ -520,6 +522,8 @@ namespace EventEase.Api.Controllers
                     totalAmount = b.TotalAmount,
                     finalPaidAmount = b.FinalPaidAmount,
                     amountPaid = amountPaid,
+                    platformFeeAmount = b.PlatformFeeAmount,
+                    vendorPayoutAmount = b.VendorPayoutAmount,
                     balanceDue = Math.Max(0, b.TotalAmount - amountPaid),
                     cancelledBy = b.CancelledBy,
                     cancellationReason = b.CancellationReason,
@@ -858,10 +862,29 @@ namespace EventEase.Api.Controllers
             // to Paid so the vendor can confirm it. Clearing the balance records the booking as
             // fully paid; it is Settled only once the event itself is completed, so paying early
             // never skips the vendor's confirmation or the event.
-            var wasPending = booking.Status.Equals(BookingStatuses.Pending, StringComparison.OrdinalIgnoreCase);
+            var wasPending = booking.Status.Equals(BookingStatuses.Pending, StringComparison.OrdinalIgnoreCase) ||
+                             booking.Status.Equals(BookingStatuses.Accepted, StringComparison.OrdinalIgnoreCase);
             if (wasPending)
             {
                 booking.Status = BookingStatuses.Paid;
+
+                // The vendor has a paid booking to confirm.
+                var vendorUserId = await _db.Vendors
+                    .Where(v => v.Id == booking.VendorId || v.UserId == booking.VendorId)
+                    .Select(v => (Guid?)v.UserId)
+                    .FirstOrDefaultAsync();
+                if (vendorUserId is { } vendorUser && vendorUser != Guid.Empty)
+                {
+                    _db.Notifications.Add(new Notification
+                    {
+                        Id = Guid.NewGuid(),
+                        UserId = vendorUser,
+                        Title = "New booking paid",
+                        Message = $"'{booking.EventName}' on {booking.EventDate:d MMM yyyy} has been paid. Confirm it in your bookings.",
+                        Type = "booking",
+                        CreatedAt = DateTime.UtcNow
+                    });
+                }
             }
             if (fullyPaid)
             {
@@ -951,6 +974,25 @@ namespace EventEase.Api.Controllers
             var previous = booking.Status;
             booking.Status = target;
 
+            if (target.Equals(BookingStatuses.Confirmed, StringComparison.OrdinalIgnoreCase) && isVendor)
+            {
+                booking.VendorConfirmedAt = DateTime.UtcNow;
+            }
+
+            // Tell the customer when the vendor or support moves their booking along.
+            if ((isVendor || isStaff) && CustomerMessageFor(target, booking) is { } message)
+            {
+                _db.Notifications.Add(new Notification
+                {
+                    Id = Guid.NewGuid(),
+                    UserId = booking.UserId,
+                    Title = message.Title,
+                    Message = message.Body,
+                    Type = "booking",
+                    CreatedAt = DateTime.UtcNow
+                });
+            }
+
             if (target.Equals(BookingStatuses.Confirmed, StringComparison.OrdinalIgnoreCase) && booking.DamageCharges > 0)
             {
                 booking.IsDamageChargeApproved = true;
@@ -967,6 +1009,20 @@ namespace EventEase.Api.Controllers
 
             await _db.SaveChangesAsync();
             return Ok(new { success = true, status = target });
+        }
+
+        /// <summary>The customer-facing note for a status the vendor or support has set.</summary>
+        private static (string Title, string Body)? CustomerMessageFor(string status, Booking booking)
+        {
+            var name = booking.EventName;
+            return BookingStatuses.Normalize(status) switch
+            {
+                BookingStatuses.Confirmed => ("Booking confirmed", $"Your vendor confirmed '{name}' on {booking.EventDate:d MMM yyyy}."),
+                BookingStatuses.Rejected => ("Booking declined", $"The vendor could not take '{name}'. Any payment will be refunded."),
+                BookingStatuses.InProgress => ("Your event has started", $"The vendor has started '{name}'."),
+                BookingStatuses.Completed => ("Event completed", $"'{name}' is marked as completed. Leave a review for your vendor."),
+                _ => null
+            };
         }
 
         [Authorize]
