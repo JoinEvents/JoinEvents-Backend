@@ -35,6 +35,12 @@ namespace EventEase.Api.Push
                 ("support", "verification") => "/support/tabs/verifications",
                 ("admin", "verification") => "/admin/verifications",
                 ("customer", "support") => "/customer/support",
+                ("customer", "rfp") => "/customer/quotes",
+                ("vendor", "rfp") => "/vendor/tabs/quote-board",
+                ("customer", "payment") => "/customer/payments",
+                ("vendor", "payment") => "/vendor/finance",
+                ("customer", "dispute") => "/customer/tabs/bookings",
+                ("vendor", "dispute") => "/vendor/tabs/bookings",
                 ("support", "support") when id != null => $"/support/ticket/{id}",
                 ("support", "support") => "/support/tabs/tickets",
                 _ => $"/{area}/notifications"
