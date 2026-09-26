@@ -1187,7 +1187,19 @@ namespace EventEase.Api.Controllers
                 Actor = cancelledBy,
                 CreatedAt = DateTime.UtcNow
             });
-            
+
+            // The other side hears about it (both do when support or an admin cancels).
+            var what = $"'{booking.EventName}' on {booking.EventDate:d MMM yyyy}";
+            var vendorUser = await EventEase.Api.Realtime.Notify.VendorUserIdAsync(_db, booking.VendorId);
+            if (cancelledBy != "customer")
+                EventEase.Api.Realtime.Notify.User(_db, booking.UserId, "Booking cancelled",
+                    refundAmt > 0 ? $"{what} was cancelled. ₹{refundAmt:N0} will be refunded to you." : $"{what} was cancelled.",
+                    EventEase.Api.Realtime.Notify.Booking);
+            if (cancelledBy != "vendor")
+                EventEase.Api.Realtime.Notify.User(_db, vendorUser, "Booking cancelled",
+                    cancelledBy == "customer" ? $"The customer cancelled {what}." : $"{what} was cancelled by JoinEvents support.",
+                    EventEase.Api.Realtime.Notify.Booking);
+
             await _db.SaveChangesAsync();
             return Ok(new { success = true });
         }
@@ -1289,6 +1301,11 @@ namespace EventEase.Api.Controllers
                 Actor = GetUserRole() ?? "Customer",
                 CreatedAt = DateTime.UtcNow
             });
+
+            var disputed = $"'{booking.EventName}' on {booking.EventDate:d MMM yyyy}: {req.Reason}";
+            await EventEase.Api.Realtime.Notify.StaffAsync(_db, "Dispute raised", disputed, EventEase.Api.Realtime.Notify.Dispute);
+            EventEase.Api.Realtime.Notify.User(_db, await EventEase.Api.Realtime.Notify.VendorUserIdAsync(_db, booking.VendorId),
+                "A customer raised a dispute", $"{disputed}. Support will be in touch.", EventEase.Api.Realtime.Notify.Booking);
 
             await _db.SaveChangesAsync();
             return Ok(new { success = true });

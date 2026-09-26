@@ -64,6 +64,14 @@ namespace EventEase.Api.Controllers
                 await _db.SaveChangesAsync();
             }
 
+            if (!IsAgent())
+            {
+                var from = await _db.Users.Where(u => u.Id == userId).Select(u => u.Name).FirstOrDefaultAsync();
+                await EventEase.Api.Realtime.Notify.StaffAsync(_db, "New support ticket",
+                    $"{(string.IsNullOrWhiteSpace(from) ? "A customer" : from)}: {ticket.Subject}", EventEase.Api.Realtime.Notify.Support);
+                await _db.SaveChangesAsync();
+            }
+
             return Ok(await MapToTicketResponseAsync(ticket, IsAgent()));
         }
 
@@ -138,6 +146,12 @@ namespace EventEase.Api.Controllers
             var ticket = await _db.SupportTickets.FindAsync(id);
             if (ticket is null) return NotFound(new { error = "Ticket not found." });
 
+            // [SECURITY] Only the ticket's owner or staff may reply, and only staff write internal notes.
+            var agent = IsAgent();
+            if (!agent && ticket.UserId != senderId) return Forbid();
+            var isInternal = agent && dto.IsInternal;
+            if (string.IsNullOrWhiteSpace(dto.Message)) return BadRequest(new { error = "Message cannot be empty." });
+
             var message = new EventEase.Core.Entities.ChatMessage
             {
                 Id = Guid.NewGuid(),
@@ -145,9 +159,15 @@ namespace EventEase.Api.Controllers
                 SenderId = senderId,
                 Content = dto.Message,
                 Timestamp = DateTime.UtcNow,
-                IsInternal = dto.IsInternal
+                IsInternal = isInternal
             };
             _db.ChatMessages.Add(message);
+
+            var preview = dto.Message.Length > 140 ? dto.Message[..137] + "…" : dto.Message;
+            if (agent && !isInternal && ticket.UserId != senderId)
+                EventEase.Api.Realtime.Notify.User(_db, ticket.UserId, $"Support replied: {ticket.Subject}", preview, EventEase.Api.Realtime.Notify.Support);
+            else if (!agent)
+                await EventEase.Api.Realtime.Notify.StaffAsync(_db, $"Customer replied: {ticket.Subject}", preview, EventEase.Api.Realtime.Notify.Support);
 
             if (ticket.Status.Equals("Open", StringComparison.OrdinalIgnoreCase))
             {
@@ -164,7 +184,9 @@ namespace EventEase.Api.Controllers
         public async Task<IActionResult> UpdateStatusPath(Guid id, [FromBody] UpdateTicketDto dto)
         {
             var ticket = await _service.UpdatePropertiesAsync(id, dto.Status, dto.Priority);
-            return ticket is null ? NotFound() : Ok(await MapToTicketResponseAsync(ticket, IsAgent()));
+            if (ticket is null) return NotFound();
+            await NotifyTicketStatusAsync(ticket, dto.Status);
+            return Ok(await MapToTicketResponseAsync(ticket, IsAgent()));
         }
 
         [Authorize(Policy = "SupportOrAdmin")]
@@ -172,7 +194,19 @@ namespace EventEase.Api.Controllers
         public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTicketDto dto)
         {
             var ticket = await _service.UpdatePropertiesAsync(id, dto.Status, dto.Priority);
-            return ticket is null ? NotFound() : Ok(await MapToTicketResponseAsync(ticket, IsAgent()));
+            if (ticket is null) return NotFound();
+            await NotifyTicketStatusAsync(ticket, dto.Status);
+            return Ok(await MapToTicketResponseAsync(ticket, IsAgent()));
+        }
+
+        /// <summary>The ticket's owner hears when it is resolved or closed.</summary>
+        private async Task NotifyTicketStatusAsync(EventEase.Core.Entities.SupportTicket ticket, string? status)
+        {
+            var s = (status ?? "").Trim().ToLowerInvariant();
+            if (s is not ("resolved" or "closed")) return;
+            EventEase.Api.Realtime.Notify.User(_db, ticket.UserId, s == "resolved" ? "Your ticket is resolved ✅" : "Your ticket was closed",
+                $"{ticket.Subject}. Reply in Support if you still need help.", EventEase.Api.Realtime.Notify.Support);
+            await _db.SaveChangesAsync();
         }
 
         private async Task<object> MapToTicketResponseAsync(EventEase.Core.Entities.SupportTicket ticket, bool showInternal = false)

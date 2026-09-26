@@ -236,6 +236,8 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 // Pushes each saved notification to its owner over the hub (see NotificationPushInterceptor).
+// Phone notifications through Firebase; off (a no-op) until a service account is configured.
+builder.Services.AddSingleton<EventEase.Api.Push.IPushSender, EventEase.Api.Push.FcmPushSender>();
 builder.Services.AddSingleton<EventEase.Api.Realtime.IRealtimeNotifier, EventEase.Api.Realtime.RealtimeNotifier>();
 builder.Services.AddSingleton<EventEase.Api.Realtime.NotificationPushInterceptor>();
 

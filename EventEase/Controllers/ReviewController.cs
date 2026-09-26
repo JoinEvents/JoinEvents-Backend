@@ -138,6 +138,9 @@ namespace EventEase.Api.Controllers
             }
 
             _db.Reviews.Add(review);
+            EventEase.Api.Realtime.Notify.User(_db, await EventEase.Api.Realtime.Notify.VendorUserIdAsync(_db, review.VendorId),
+                $"New {review.Rating}★ review", string.IsNullOrWhiteSpace(review.Comment) ? "A customer rated your service." : $"\"{(review.Comment.Length > 120 ? review.Comment[..117] + "…" : review.Comment)}\"",
+                EventEase.Api.Realtime.Notify.General);
             await _db.SaveChangesAsync();
             await PackageRatingHelper.RecalculatePackageRating(_db, review.BookingId);
             return Ok(review);

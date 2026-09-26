@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
@@ -25,6 +26,7 @@ namespace EventEase.Api.Controllers
         private readonly IHubContext<ChatHub> _hubContext;
         private readonly EventEase.Api.Realtime.IRealtimeNotifier _realtime;
         private readonly IFileStorage _fileStorage;
+        private readonly EventEase.Infrastructure.Data.EventEaseDbContext _db;
 
         public EnterprisePortalsController(
             IPortalsService portals,
@@ -33,8 +35,10 @@ namespace EventEase.Api.Controllers
             INotificationService notifications,
             IHubContext<ChatHub> hubContext,
             IFileStorage fileStorage,
-            EventEase.Api.Realtime.IRealtimeNotifier realtime)
+            EventEase.Api.Realtime.IRealtimeNotifier realtime,
+            EventEase.Infrastructure.Data.EventEaseDbContext db)
         {
+            _db = db;
             _fileStorage = fileStorage;
             _realtime = realtime;
             _portals = portals;
@@ -76,8 +80,21 @@ namespace EventEase.Api.Controllers
         [HttpPost("/api/v1/customer/rfp/{rfpId:guid}/bids/{bidId:guid}/accept")]
         public async Task<IActionResult> AcceptBid(Guid rfpId, Guid bidId)
         {
+            // [SECURITY] Only the customer who posted the quote request may accept a bid on it.
+            var rfp = await _db.Rfps.FindAsync(rfpId);
+            if (rfp == null) return NotFound(new { error = "Quote request not found." });
+            if (rfp.CustomerId != GetUserId()) return Forbid();
+
             var ok = await _portals.AcceptBidAsync(rfpId, bidId);
             if (!ok) return BadRequest(new { error = "Failed to accept bid" });
+
+            var bid = await _db.Bids.FindAsync(bidId);
+            if (bid != null)
+            {
+                Realtime.Notify.User(_db, await Realtime.Notify.VendorUserIdAsync(_db, bid.VendorId),
+                    "Your quote was accepted 🎉", $"The customer accepted your quote for '{rfp.Title}'.", Realtime.Notify.Quote);
+                await _db.SaveChangesAsync();
+            }
             return Ok(new
             {
                 success = true,
@@ -105,6 +122,7 @@ namespace EventEase.Api.Controllers
 
             var doc = await _documents.UploadDocumentAsync(
                 userId, documentType ?? "GST Certificate", file.FileName, storedPath);
+            await NotifyStaffOfDocumentAsync(userId, doc.DocumentType);
 
             return Ok(new
             {
@@ -116,12 +134,29 @@ namespace EventEase.Api.Controllers
             });
         }
 
+        private async Task NotifyStaffOfDocumentAsync(Guid vendorUserId, string documentType)
+        {
+            var vendorName = await _db.Vendors.Where(v => v.UserId == vendorUserId).Select(v => v.BusinessName).FirstOrDefaultAsync();
+            await Realtime.Notify.StaffAsync(_db, "Verification document to review",
+                $"{(string.IsNullOrWhiteSpace(vendorName) ? "A vendor" : vendorName)} uploaded {documentType}.", Realtime.Notify.Verification);
+            await _db.SaveChangesAsync();
+        }
+
         [Authorize]
         [HttpPost("/api/v1/vendor/rfp/{rfpId:guid}/bid")]
         public async Task<IActionResult> PlaceBid(Guid rfpId, [FromBody] PlaceBidDto dto)
         {
             var userId = GetUserId();
             var bid = await _portals.PlaceBidAsync(rfpId, userId, dto);
+
+            var rfp = await _db.Rfps.FindAsync(rfpId);
+            if (rfp != null)
+            {
+                var vendorName = await _db.Vendors.Where(v => v.UserId == userId).Select(v => v.BusinessName).FirstOrDefaultAsync();
+                Realtime.Notify.User(_db, rfp.CustomerId, "New quote received",
+                    $"{(string.IsNullOrWhiteSpace(vendorName) ? "A vendor" : vendorName)} quoted ₹{bid.ProposedAmount:N0} for '{rfp.Title}'.", Realtime.Notify.Quote);
+                await _db.SaveChangesAsync();
+            }
             return StatusCode(201, new
             {
                 id = "bid_" + bid.Id.ToString().Substring(0, 6),
