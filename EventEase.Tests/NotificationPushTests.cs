@@ -19,7 +19,7 @@ namespace EventEase.Tests
     /// <summary>Records what would go to phones instead of calling Firebase.</summary>
     public class FakePushSender : IPushSender
     {
-        public record Sent(Guid UserId, string Role, string Title, string Body, string Kind, string Link);
+        public record Sent(Guid UserId, string Role, string Title, string Body, string Kind, string Link, string? Group = null);
         public readonly ConcurrentQueue<Sent> Items = new();
         private readonly IServiceScopeFactory _scopes;
         public FakePushSender(IServiceScopeFactory scopes) => _scopes = scopes;
@@ -32,7 +32,7 @@ namespace EventEase.Tests
             foreach (var id in userIds)
             {
                 var role = db.Users.Where(u => u.Id == id).Select(u => u.Role).FirstOrDefault() ?? "";
-                Items.Enqueue(new Sent(id, role, message.Title, message.Body, message.Kind, message.Link(PushLinks.Area(role))));
+                Items.Enqueue(new Sent(id, role, message.Title, message.Body, message.Kind, message.Link(PushLinks.Area(role)), message.Group));
             }
             return Task.CompletedTask;
         }
@@ -174,6 +174,7 @@ namespace EventEase.Tests
             var push = await _factory.Push.WaitForAsync(p => p.UserId == vendorUserId && p.Kind == "message" && p.Body == "Can we start at 6?");
             Assert.Equal($"/vendor/chat/{threadId}", push.Link);
             Assert.Equal("Asha", push.Title);
+            Assert.Equal(threadId, push.Group); // one conversation, one group in the tray
             await Task.Delay(200);
             Assert.DoesNotContain(_factory.Push.Items, p => p.UserId == customerId && p.Body == "Can we start at 6?");
         }
