@@ -51,7 +51,7 @@ namespace EventEase.Api.Realtime
             var preview = message.Content.Length > 140 ? message.Content[..137] + "…" : message.Content;
             InBackground(recipients, new PushMessage(
                 string.IsNullOrWhiteSpace(message.SenderName) ? "New message" : message.SenderName,
-                preview, "message", role => PushLinks.For(role, "message", message.ThreadId)));
+                preview, "message", role => PushLinks.For(role, "message", message.ThreadId), message.ThreadId));
         }
 
         public async Task NotificationAsync(Notification notification)

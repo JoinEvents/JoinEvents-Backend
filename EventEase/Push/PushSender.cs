@@ -8,7 +8,8 @@ namespace EventEase.Api.Push
 {
     /// <summary>A push notification to the phones of the given users.</summary>
     /// <param name="Link">Builds the in-app route to open when tapped, from the recipient's role.</param>
-    public record PushMessage(string Title, string Body, string Kind, Func<string?, string> Link);
+    /// <param name="Group">Keeps related pushes together in the tray, e.g. one chat's messages.</param>
+    public record PushMessage(string Title, string Body, string Kind, Func<string?, string> Link, string? Group = null);
 
     public interface IPushSender
     {
@@ -101,6 +102,13 @@ namespace EventEase.Api.Push
                             {
                                 Priority = Priority.High,
                                 Notification = new AndroidNotification { ChannelId = AndroidChannel, Sound = "default" }
+                            },
+                            // Without an explicit sound iOS files the alert silently, and without
+                            // priority 10 a phone in low-power mode can hold it back.
+                            Apns = new ApnsConfig
+                            {
+                                Headers = new Dictionary<string, string> { ["apns-priority"] = "10" },
+                                Aps = new Aps { Sound = "default", ThreadId = message.Group }
                             }
                         });
                         for (var i = 0; i < result.Responses.Count; i++)
