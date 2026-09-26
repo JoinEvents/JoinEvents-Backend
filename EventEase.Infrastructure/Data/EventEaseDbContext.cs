@@ -31,6 +31,7 @@ namespace EventEase.Infrastructure.Data
         public DbSet<ChatThread> ChatThreads { get; set; }
         public DbSet<ChatMessage> ChatMessages { get; set; }
         public DbSet<Notification> Notifications { get; set; }
+        public DbSet<DeviceToken> DeviceTokens { get; set; }
         public DbSet<EventEase.Core.Entities.EventCategory> EventCategories { get; set; }
         public DbSet<LoyaltyTransaction> LoyaltyTransactions { get; set; }
         public DbSet<SupportTicket> SupportTickets { get; set; }
@@ -46,6 +47,15 @@ namespace EventEase.Infrastructure.Data
                 .HasMany(v => v.services)
                 .WithOne(s => s.vendors)
                 .HasForeignKey(s => s.VendorId);
+
+            // An install's token belongs to whoever last signed in on it.
+            modelBuilder.Entity<DeviceToken>(e =>
+            {
+                e.Property(t => t.Token).HasMaxLength(512);
+                e.Property(t => t.Platform).HasMaxLength(16);
+                e.HasIndex(t => t.Token).IsUnique();
+                e.HasIndex(t => t.UserId);
+            });
 
             base.OnModelCreating(modelBuilder);
 

@@ -167,6 +167,8 @@ namespace EventEase.Api.Controllers
             };
 
             _db.VendorDocuments.Add(doc);
+            await EventEase.Api.Realtime.Notify.StaffAsync(_db, "Verification document to review",
+                $"{vendor.BusinessName} uploaded {doc.DocumentType}.", EventEase.Api.Realtime.Notify.Verification);
             await _db.SaveChangesAsync();
 
             var link = await _fileStorage.GetUrlAsync(doc.FileUrl);

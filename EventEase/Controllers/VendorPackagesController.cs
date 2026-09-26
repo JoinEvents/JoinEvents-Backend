@@ -153,21 +153,10 @@ namespace EventEase.Api.Controllers
             // Add notification for Support members
             try
             {
-                var supportUser = await _db.Users.FirstOrDefaultAsync(u => u.Role == "Support" || u.Email == "support@test.com");
-                if (supportUser != null)
-                {
-                    _db.Notifications.Add(new Notification
-                    {
-                        Id = Guid.NewGuid(),
-                        UserId = supportUser.Id,
-                        Title = "New Package Submitted",
-                        Message = $"Package '{package.Name}' has been submitted by vendor and is awaiting verification.",
-                        Type = "verification",
-                        IsRead = false,
-                        CreatedAt = DateTime.UtcNow
-                    });
-                    await _db.SaveChangesAsync();
-                }
+                // Every support agent and admin can pick it up, not just the first one found.
+                await EventEase.Api.Realtime.Notify.StaffAsync(_db, "New Package Submitted",
+                    $"Package '{package.Name}' has been submitted by vendor and is awaiting verification.", EventEase.Api.Realtime.Notify.Verification);
+                await _db.SaveChangesAsync();
             }
             catch (System.Exception ex)
             {
@@ -499,21 +488,10 @@ namespace EventEase.Api.Controllers
             // Add notification for Support members
             try
             {
-                var supportUser = await _db.Users.FirstOrDefaultAsync(u => u.Role == "Support" || u.Email == "support@test.com");
-                if (supportUser != null)
-                {
-                    _db.Notifications.Add(new Notification
-                    {
-                        Id = Guid.NewGuid(),
-                        UserId = supportUser.Id,
-                        Title = "Package Resubmitted",
-                        Message = $"Package '{package.Name}' has been updated and is awaiting verification.",
-                        Type = "verification",
-                        IsRead = false,
-                        CreatedAt = DateTime.UtcNow
-                    });
-                    await _db.SaveChangesAsync();
-                }
+                // Every support agent and admin can pick it up, not just the first one found.
+                await EventEase.Api.Realtime.Notify.StaffAsync(_db, "Package Resubmitted",
+                    $"Package '{package.Name}' has been updated and is awaiting verification.", EventEase.Api.Realtime.Notify.Verification);
+                await _db.SaveChangesAsync();
             }
             catch (System.Exception ex)
             {
